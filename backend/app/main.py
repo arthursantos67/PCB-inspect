@@ -1,7 +1,11 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth.router import router as auth_router
 from app.core.config import get_settings
+from app.core.errors import register_exception_handlers
 from app.core.health import HealthReport, build_health_report
+from app.users.router import router as users_router
 
 settings = get_settings()
 
@@ -11,6 +15,18 @@ app = FastAPI(
     docs_url="/api/docs",
     openapi_url="/api/schema",
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allow_origins_list,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+register_exception_handlers(app)
+
+app.include_router(auth_router)
+app.include_router(users_router)
 
 
 @app.get("/health", response_model=HealthReport, tags=["support"])
