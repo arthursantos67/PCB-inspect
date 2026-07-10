@@ -25,8 +25,9 @@ class InspectionImage(Base):
     # Local filesystem path to the generated annotated image (app-data directory).
     annotated_path: Mapped[str | None] = mapped_column(nullable=True)
     checksum_sha256: Mapped[str] = mapped_column(nullable=False)
-    width: Mapped[int] = mapped_column(Integer, nullable=False)
-    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Nullable: a FAILED (corrupted/unreadable) file has no dimensions to report.
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[ImageStatus] = mapped_column(
         pg_enum(ImageStatus, "image_status"),
         nullable=False,
