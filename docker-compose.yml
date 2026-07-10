@@ -1,0 +1,78 @@
+x-backend-image: &backend-image
+  build:
+    context: ./backend
+  env_file: .env
+  environment:
+    PYTHONUNBUFFERED: "1"
+  volumes:
+    - ${WATCH_ROOT_HOST_PATH:-./data/watch-root}:${WATCH_ROOT:-/data/watch-root}:ro
+    - ${APP_DATA_HOST_PATH:-./data/app-data}:${APP_DATA_DIR:-/data/app-data}
+    - ./weights:/weights:ro
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  api:
+    <<: *backend-image
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+
+  worker-inference:
+    <<: *backend-image
+    command: celery -A app.tasks.celery_app worker --pool=solo --queues=inference --loglevel=info
+    # GPU passthrough (optional locally — requires the NVIDIA Container Toolkit on the host):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  worker-agents:
+    <<: *backend-image
+    command: celery -A app.tasks.celery_app worker --pool=gevent --concurrency=4 --queues=agents --loglevel=info
+
+  beat:
+    <<: *backend-image
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+
+  db:
+    image: postgres:16
+    env_file: .env
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pcb_inspect}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+    env_file: .env
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - api
+
+volumes:
+  db_data:

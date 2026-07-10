@@ -11,6 +11,36 @@ Phase 1 issue backlog (source for the GitHub issues): [issues-phase1.md](issues-
 
 Portfolio project. The model has been trained and locally validated; implementation follows the phased plan in PRD section 15 (Phase 1: inspection core with no LLM required).
 
+## Getting started
+
+Requires Docker and Docker Compose. Everything below is local-only: every published port binds to `127.0.0.1`, nothing is exposed to the network.
+
+```bash
+cp .env.example .env   # adjust WATCH_ROOT_HOST_PATH, POSTGRES_*, LLM_* as needed
+docker compose up
+```
+
+This brings up seven services: `api` (FastAPI, `127.0.0.1:8000`), `frontend` (Next.js, `127.0.0.1:3000`), `worker-inference` and `worker-agents` (Celery workers), `beat` (Celery periodic tasks), `db` (PostgreSQL 16, `127.0.0.1:5432`), and `redis` (`127.0.0.1:6379`).
+
+Once running:
+- `http://localhost:3000` — dashboard placeholder
+- `http://localhost:8000/health` — per-dependency status (db, redis, worker, watch-root, llm)
+- `http://localhost:8000/api/docs` — Swagger UI (`/api/schema` for the raw OpenAPI document)
+
+### Required environment variables
+
+See `.env.example` for the full list and defaults. The ones you're most likely to change:
+
+| Variable | Purpose |
+|---|---|
+| `WATCH_ROOT_HOST_PATH` | Host directory the camera/production line writes images to (mounted read-only) |
+| `APP_DATA_HOST_PATH` | Host directory for the database volume, annotated images, reports, exports (writable) |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | PostgreSQL credentials |
+| `SECRET_KEY` | Session/token signing key — set to a random value outside of local dev |
+| `LLM_PROVIDER` / `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` | AI agent pipeline provider (local LM Studio/Ollama by default, section 5.2 of the PRD); no key is required to run or evaluate the project |
+
+GPU passthrough for `worker-inference` (NVIDIA Container Toolkit) is documented but commented out in `docker-compose.yml` — optional locally, the worker falls back to CPU.
+
 ## Model weights
 
 `weights/best.pt` is not tracked in this repository (114 MB, over GitHub's 100 MB limit — and model binaries generally don't belong in git history). To obtain it:
