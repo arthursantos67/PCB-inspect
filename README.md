@@ -41,6 +41,21 @@ See `.env.example` for the full list and defaults. The ones you're most likely t
 
 GPU passthrough for `worker-inference` (NVIDIA Container Toolkit) is documented but commented out in `docker-compose.yml` — optional locally, the worker falls back to CPU.
 
+## Database
+
+The `api` container applies Alembic migrations and runs the dev seed automatically on startup (a local dev account, default `SystemConfig` values, and `ModelVersion v1.0.0` registered from `weights/best.pt` — PRD section 14.3). To run either manually against a running stack:
+
+```bash
+docker compose exec api alembic upgrade head
+docker compose exec api python -m app.db.seed
+```
+
+To create a new migration after changing a model in `backend/app/models/`:
+
+```bash
+docker compose exec api alembic revision --autogenerate -m "describe the change"
+```
+
 ## Model weights
 
 `weights/best.pt` is not tracked in this repository (114 MB, over GitHub's 100 MB limit — and model binaries generally don't belong in git history). To obtain it:
