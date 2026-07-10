@@ -24,6 +24,13 @@ build/
 .env.*
 !.env.example
 
+# Local runtime data (watch-root fixture, app-data: db volume, annotated images, reports, exports)
+data/*
+!data/watch-root/
+!data/watch-root/.gitkeep
+!data/app-data/
+!data/app-data/.gitkeep
+
 # Editor / tooling
 .claude/
 .vscode/
