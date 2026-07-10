@@ -14,6 +14,7 @@ dependencies = [
     "celery[redis]>=5.4",
     "redis>=5.2",
     "argon2-cffi>=23.1",
+    "pyjwt>=2.9",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,11 @@ extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's DI pattern relies on Depends(...)/Security(...) as argument defaults; they're not
+# mutated, so B008 (no function calls in defaults) is a false positive here.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Security"]
 
 [tool.mypy]
 python_version = "3.12"

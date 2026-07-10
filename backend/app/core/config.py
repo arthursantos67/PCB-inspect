@@ -36,6 +36,21 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://redis:6379/1"
     celery_result_backend: str = "redis://redis:6379/1"
 
+    # Auth (section 13) — short-lived access token with refresh; progressive lockout.
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_minutes: int = 60 * 24 * 7
+    max_failed_login_attempts: int = 5
+    lockout_base_seconds: int = 60
+    lockout_max_seconds: int = 30 * 60
+
+    # CORS — the frontend is a separate origin (different port) even though both are
+    # localhost-only (section 13); comma-separated list of allowed origins.
+    cors_allow_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:
