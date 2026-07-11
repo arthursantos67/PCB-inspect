@@ -17,6 +17,7 @@ dependencies = [
     "pyjwt>=2.9",
     "pillow>=11.0",
     "python-multipart>=0.0.9",
+    "ultralytics>=8.3",
 ]
 
 [project.optional-dependencies]
@@ -59,6 +60,13 @@ exclude = ["tests/"]
 # Celery's @task decorator isn't typed; the tasks themselves stay strict.
 module = "app.tasks.*"
 disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+# Ultralytics ships a partial py.typed marker that trips mypy's strict attribute checks
+# (e.g. YOLO/Boxes) without actually providing usable stubs — treated as untyped (Any) here
+# rather than fought call site by call site; app.inference itself stays strict.
+module = "ultralytics.*"
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

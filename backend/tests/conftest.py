@@ -1,7 +1,7 @@
 import pathlib
 import subprocess
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 import pytest_asyncio
@@ -48,6 +48,20 @@ async def db_session() -> AsyncSession:
             text(f"TRUNCATE TABLE {', '.join(_TABLES_IN_FK_ORDER)} RESTART IDENTITY CASCADE")
         )
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _reset_inference_model_cache() -> Iterator[None]:
+    """`app.inference.model` caches the warm-started model in a module-level global by
+    design (RV-01 — loaded once per *worker process*), but a pytest run is one process
+    shared across every test; without a reset, whichever test happens to load it first
+    would silently satisfy every later test regardless of what it actually seeded/mocked.
+    """
+    from app.inference.model import reset_loaded_model_for_tests
+
+    reset_loaded_model_for_tests()
+    yield
+    reset_loaded_model_for_tests()
 
 
 @pytest_asyncio.fixture

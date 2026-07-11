@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import Settings
+from app.inference.status import get_model_status
 
 Status = Literal["ok", "error", "not_configured"]
 
@@ -17,11 +18,21 @@ class CheckResult(BaseModel):
     detail: str | None = None
 
 
+class WorkerCheckResult(CheckResult):
+    """Adds the inference worker's warm-start state (RV-01/RV-02) on top of the plain
+    reachability check every other component reports.
+    """
+
+    model_loaded: bool = False
+    device: str | None = None
+    model_version: str | None = None
+
+
 class HealthReport(BaseModel):
     status: Literal["ok", "degraded"]
     db: CheckResult
     redis: CheckResult
-    worker: CheckResult
+    worker: WorkerCheckResult
     watch_root: CheckResult
     llm: CheckResult
 
@@ -50,17 +61,31 @@ async def check_redis(settings: Settings) -> CheckResult:
             await client.aclose()
 
 
-async def check_worker(settings: Settings) -> CheckResult:
-    """Pings Celery workers. Model-load/device state is reported once FR-05 lands."""
+async def check_worker(settings: Settings) -> WorkerCheckResult:
+    """Pings Celery workers, then enriches the result with the inference worker's warm-start
+    state (RV-01/RV-02) published to Redis by `app.inference.model.ensure_model_loaded`.
+    """
     try:
         from app.tasks.celery_app import celery_app
 
         replies = await asyncio.to_thread(celery_app.control.ping, timeout=1.0)
         if not replies:
-            return CheckResult(status="error", detail="no worker responded")
-        return CheckResult(status="ok", detail=f"{len(replies)} worker(s) responding")
+            return WorkerCheckResult(status="error", detail="no worker responded")
     except Exception as exc:  # noqa: BLE001
-        return CheckResult(status="error", detail=str(exc))
+        return WorkerCheckResult(status="error", detail=str(exc))
+
+    model_status = await get_model_status(settings)
+    if model_status is None:
+        return WorkerCheckResult(
+            status="ok", detail=f"{len(replies)} worker(s) responding", model_loaded=False
+        )
+    return WorkerCheckResult(
+        status="ok",
+        detail=f"{len(replies)} worker(s) responding",
+        model_loaded=model_status["model_loaded"],
+        device=model_status["device"],
+        model_version=model_status["model_version"],
+    )
 
 
 async def check_watch_root(settings: Settings) -> CheckResult:

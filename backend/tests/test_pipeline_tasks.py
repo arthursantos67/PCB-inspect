@@ -12,9 +12,13 @@ from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import text
+import pytest
+from PIL import Image
+from sqlalchemy import func, select, text
 
-from app.models import InspectionImage
+from app.core.config import get_settings
+from app.inference.detect import RawDetection
+from app.models import Detection, InspectionImage, ModelVersion
 from app.models.enums import ImageStatus
 from app.tasks.base import PipelineTask
 from app.tasks.celery_app import celery_app
@@ -47,10 +51,54 @@ async def _get_image(image_id: uuid.UUID) -> InspectionImage | None:
         return await db.get(InspectionImage, image_id)
 
 
+async def _count_detections(image_id: uuid.UUID) -> int:
+    async with task_db_session() as db:
+        return (
+            await db.scalar(
+                select(func.count()).select_from(Detection).where(Detection.image_id == image_id)
+            )
+        ) or 0
+
+
+async def _seed_active_model_version(version: str = "v1.0.0") -> uuid.UUID:
+    async with task_db_session() as db:
+        model_version = ModelVersion(
+            version=version, weights_path="/weights/best.pt", is_active=True
+        )
+        db.add(model_version)
+        await db.commit()
+        return model_version.id
+
+
+class _FakeYOLO:
+    """Stands in for `ultralytics.YOLO` in tests that drive `run_inference` end-to-end:
+    never touches real weights, and records how many times it's constructed so warm start
+    (RV-01) can be asserted directly.
+    """
+
+    instances: list["_FakeYOLO"] = []
+
+    def __init__(self, weights_path: str) -> None:
+        self.weights_path = weights_path
+        type(self).instances.append(self)
+
+    def to(self, device: str) -> "_FakeYOLO":
+        self.device = device
+        return self
+
+
+def _stub_inference(monkeypatch: pytest.MonkeyPatch, detections: list[RawDetection]) -> None:
+    monkeypatch.setattr("app.inference.model._yolo_class", lambda: _FakeYOLO)
+    monkeypatch.setattr("app.inference.service.detect", lambda *args, **kwargs: detections)
+
+
 def teardown_function() -> None:
+    _FakeYOLO.instances = []
+
     async def _truncate() -> None:
         async with task_db_session() as db:
             await db.execute(text("TRUNCATE TABLE inspection_image RESTART IDENTITY CASCADE"))
+            await db.execute(text("TRUNCATE TABLE model_version RESTART IDENTITY CASCADE"))
             await db.commit()
 
     _run(_truncate())
@@ -69,7 +117,13 @@ def test_pipeline_tasks_ack_late_and_requeue_on_worker_loss() -> None:
 # --- run_inference: reaches PROCESSING (Enqueue on Ingestion, task side) ----------------------
 
 
-def test_run_inference_transitions_queued_to_processing(tmp_path: Path) -> None:
+def test_run_inference_reaches_completed_with_no_reportable_detections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-05's no-defect path: PROCESSING -> COMPLETED directly, skipping DETECTED."""
+    _stub_inference(monkeypatch, detections=[])
+    _run(_seed_active_model_version())
+
     image_path = tmp_path / "board.jpg"
     image_path.write_bytes(b"fake-image-bytes")
     image_id = _run(_create_image(original_path=str(image_path)))
@@ -78,17 +132,32 @@ def test_run_inference_transitions_queued_to_processing(tmp_path: Path) -> None:
 
     image = _run(_get_image(image_id))
     assert image is not None
-    assert image.status == ImageStatus.PROCESSING
+    assert image.status == ImageStatus.COMPLETED
+    assert image.annotated_path is None
     assert image.failure_reason is None
+    assert len(_FakeYOLO.instances) == 1  # warm start: the model is loaded exactly once (RV-01)
 
 
-def test_run_inference_is_idempotent_on_redelivery(tmp_path: Path) -> None:
+def test_run_inference_is_idempotent_on_redelivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Worker Restart Safety (acks_late): a task can be redelivered after already committing
-    its PROCESSING transition. Re-running it must not fail — PROCESSING -> PROCESSING isn't a
-    valid transition, so a naive re-apply would raise and wrongly mark the image FAILED.
+    its terminal transition. Re-running it must not fail or reprocess the image — the guard
+    is `image.status is not PROCESSING`, checked before detection ever runs again.
     """
+    bbox = {"x1": 0.1, "y1": 0.1, "x2": 0.5, "y2": 0.5}
+    _stub_inference(
+        monkeypatch,
+        detections=[RawDetection(defect_type="short", confidence=0.9, bbox=bbox)],
+    )
+    _run(_seed_active_model_version())
+    monkeypatch.setattr(
+        "app.tasks.pipeline.get_settings",
+        lambda: get_settings().model_copy(update={"app_data_dir": tmp_path}),
+    )
+
     image_path = tmp_path / "board.jpg"
-    image_path.write_bytes(b"fake-image-bytes")
+    Image.new("RGB", (64, 64), (0, 0, 0)).save(image_path, format="JPEG")
     image_id = _run(_create_image(original_path=str(image_path)))
 
     run_inference.apply(args=[str(image_id)])
@@ -97,8 +166,9 @@ def test_run_inference_is_idempotent_on_redelivery(tmp_path: Path) -> None:
     assert not result.failed()
     image = _run(_get_image(image_id))
     assert image is not None
-    assert image.status == ImageStatus.PROCESSING
+    assert image.status == ImageStatus.DETECTED
     assert image.failure_reason is None
+    assert _run(_count_detections(image_id)) == 1  # not duplicated by the redelivered attempt
 
 
 # --- Retry behavior and failure isolation -----------------------------------------------------

@@ -23,6 +23,11 @@ services:
   worker-inference:
     <<: *backend-image
     command: celery -A app.tasks.celery_app worker --pool=solo --queues=inference --loglevel=info
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # Gates the warm-start-at-boot hook (RV-01) in app/tasks/pipeline.py — only this
+      # service should ever load YOLO weights into memory.
+      WORKER_ROLE: inference
     # GPU passthrough (optional locally — requires the NVIDIA Container Toolkit on the host):
     # deploy:
     #   resources:
@@ -35,6 +40,9 @@ services:
   worker-agents:
     <<: *backend-image
     command: celery -A app.tasks.celery_app worker --pool=gevent --concurrency=4 --queues=agents --loglevel=info
+    environment:
+      PYTHONUNBUFFERED: "1"
+      WORKER_ROLE: agents
 
   beat:
     <<: *backend-image
