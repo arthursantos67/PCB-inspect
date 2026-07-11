@@ -3,10 +3,11 @@ confidence thresholds (RV-03), persist Detection rows with model version traceab
 (RV-05), generate the annotated image for images with at least one reportable detection
 (RV-04), and transition `InspectionImage` accordingly.
 
-`DETECTED` is reached when there's at least one reportable detection (Issue 7 picks up from
-there — baseline/agent analysis). Otherwise the image goes straight to `COMPLETED` with no
-defect result (FR-05's no-defect path) even if lower-confidence detections were persisted
-for audit purposes (RV-03's rationale) — reportability, not storage, decides the path.
+`DETECTED` is reached when there's at least one reportable detection (the caller picks up
+from there — baseline/agent analysis, `app.analyses.service`). Otherwise the image goes
+straight to `COMPLETED` with no defect result (FR-05's no-defect path) even if
+lower-confidence detections were persisted for audit purposes (RV-03's rationale) —
+reportability, not storage, decides the path.
 """
 
 from decimal import Decimal
@@ -43,7 +44,11 @@ async def process_image(
     loaded: LoadedModel,
     *,
     app_data_dir: Path,
-) -> None:
+) -> list[Detection]:
+    """Returns the persisted, reportable `Detection` rows (`is_reported=True`) — empty
+    whenever the image doesn't reach `DETECTED` — so the caller can hand them straight to
+    baseline analysis generation without re-querying.
+    """
     min_store, min_report = await _get_thresholds(db)
 
     try:
@@ -55,21 +60,23 @@ async def process_image(
     # confidence floor, but that's an internal NMS parameter, not a contract — this is what
     # actually enforces RV-03 (confidence >= min_confidence_store persisted).
     stored: list[RawDetection] = [d for d in raw_detections if d.confidence >= min_store]
-    reportable = [d for d in stored if d.confidence >= min_report]
+    reportable_raw = [d for d in stored if d.confidence >= min_report]
 
+    reportable: list[Detection] = []
     for raw in stored:
-        db.add(
-            Detection(
-                image_id=image.id,
-                defect_type=DefectType(raw.defect_type),
-                bbox=raw.bbox,
-                confidence=_to_confidence_decimal(raw.confidence),
-                is_reported=raw.confidence >= min_report,
-                model_version_id=loaded.model_version_id,
-            )
+        detection = Detection(
+            image_id=image.id,
+            defect_type=DefectType(raw.defect_type),
+            bbox=raw.bbox,
+            confidence=_to_confidence_decimal(raw.confidence),
+            is_reported=raw.confidence >= min_report,
+            model_version_id=loaded.model_version_id,
         )
+        db.add(detection)
+        if detection.is_reported:
+            reportable.append(detection)
 
-    if reportable:
+    if reportable_raw:
         annotated_path = write_annotated_image(
             source_path=Path(image.original_path),
             detections=stored,
@@ -80,3 +87,5 @@ async def process_image(
         transition(image, ImageStatus.DETECTED)
     else:
         transition(image, ImageStatus.COMPLETED)
+
+    return reportable

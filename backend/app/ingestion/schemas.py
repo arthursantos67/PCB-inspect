@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.analyses.schemas import AnalysisOut
 from app.models.enums import ImageStatus
 
 FileOutcome = Literal["ingested", "duplicate", "failed", "skipped"]
@@ -51,7 +52,9 @@ class IngestionStatus(BaseModel):
 
 
 class InspectionProgress(BaseModel):
-    """Current pipeline status for polling (FR-04), as a fallback to SSE (FR-14)."""
+    """Current pipeline status for polling (FR-04), as a fallback to SSE (FR-14). `analysis`
+    is populated once the baseline (or, later, agent) analysis exists (FR-06, section 11.5).
+    """
 
     model_config = {"from_attributes": True}
 
@@ -60,3 +63,4 @@ class InspectionProgress(BaseModel):
     failure_reason: str | None
     created_at: datetime
     processed_at: datetime | None
+    analysis: AnalysisOut | None = None
