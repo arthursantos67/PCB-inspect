@@ -63,8 +63,12 @@ def isolated_app_data_dir(tmp_path: Path):
 class _FakeInferenceTask:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.fail_next_n: int = 0
 
     def delay(self, inspection_image_id: str) -> None:
+        if self.fail_next_n > 0:
+            self.fail_next_n -= 1
+            raise ConnectionError("broker unreachable")
         self.calls.append(inspection_image_id)
 
 
@@ -421,6 +425,28 @@ async def test_scan_does_not_enqueue_duplicate_or_failed_files(
     )
 
     assert len(enqueue_stub.calls) == 1  # only the valid image is enqueued
+
+
+async def test_scan_still_succeeds_and_enqueues_the_rest_when_one_enqueue_fails(
+    client: AsyncClient, watch_root: Path, enqueue_stub: _FakeInferenceTask
+) -> None:
+    token = await _setup_account(client)
+    batch_dir = watch_root / "BATCH-001"
+    batch_dir.mkdir()
+    _write_jpeg(batch_dir / "board-1.jpg")
+    _write_png(batch_dir / "board-2.png")
+    enqueue_stub.fail_next_n = 1  # simulates a broker hiccup on the first enqueue call
+
+    response = await client.post(
+        "/api/v1/inspections/scan", json={"path": str(watch_root)}, headers=_auth_headers(token)
+    )
+
+    # A broker failure enqueuing one already-committed row must not 500 the request (both
+    # rows are durably QUEUED regardless), and must not stop the rest of the batch from
+    # being enqueued (FR-04, section 3.7).
+    assert response.status_code == 202
+    assert response.json()["ingested"] == 2
+    assert len(enqueue_stub.calls) == 1  # the failed one was logged and skipped, not retried here
 
 
 async def test_import_enqueues_the_ingested_file(

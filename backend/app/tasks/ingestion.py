@@ -1,8 +1,8 @@
 import asyncio
 
-from app.db.session import AsyncSessionLocal
 from app.ingestion.watcher import poll_watch_root_once
 from app.tasks.celery_app import celery_app
+from app.tasks.db import task_db_session
 
 
 @celery_app.task(name="app.tasks.ingestion.poll_watch_root")
@@ -14,6 +14,6 @@ def poll_watch_root() -> dict[str, object] | None:
 
 
 async def _poll_watch_root_async() -> dict[str, object] | None:
-    async with AsyncSessionLocal() as db:
+    async with task_db_session() as db:
         summary = await poll_watch_root_once(db)
         return summary.model_dump(mode="json") if summary else None

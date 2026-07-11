@@ -50,8 +50,10 @@ def transition(
             raise ValueError("failure_reason is required when transitioning to FAILED")
         image.failure_reason = failure_reason
     else:
-        # Leaving FAILED behind (re-ingestion) clears the stale reason.
+        # Leaving FAILED behind (re-ingestion) clears the stale reason and timestamp —
+        # the only non-FAILED target reachable from a terminal status is QUEUED.
         image.failure_reason = None
+        image.processed_at = None
 
     image.status = to
     if to in _TERMINAL_STATUSES:
@@ -61,9 +63,9 @@ def transition(
 def mark_failed(image: InspectionImage, reason: str) -> None:
     """Convenience wrapper: FAILED is reachable from every non-terminal status, so callers
     that just want "this stage blew up" don't need to know which status the image was in.
+    `transition()` already rejects COMPLETED -> FAILED on its own (COMPLETED has no allowed
+    outgoing transitions), so there's no need to special-case it here.
     """
-    if image.status is ImageStatus.COMPLETED:
-        raise InvalidTransitionError(image.status, ImageStatus.FAILED)
     if image.status is ImageStatus.FAILED:
         image.failure_reason = reason
         return

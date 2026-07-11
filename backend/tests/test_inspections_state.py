@@ -67,12 +67,13 @@ def test_transition_to_failed_persists_reason_and_sets_processed_at() -> None:
     assert image.processed_at is not None
 
 
-def test_reingestion_clears_the_stale_failure_reason() -> None:
+def test_reingestion_clears_the_stale_failure_reason_and_processed_at() -> None:
     image = _image(ImageStatus.PROCESSING)
     transition(image, ImageStatus.FAILED, failure_reason="corrupted file")
     transition(image, ImageStatus.QUEUED)
     assert image.status == ImageStatus.QUEUED
     assert image.failure_reason is None
+    assert image.processed_at is None  # otherwise looks like it already finished processing
 
 
 def test_mark_failed_works_from_any_non_terminal_status() -> None:

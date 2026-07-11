@@ -82,6 +82,25 @@ def test_run_inference_transitions_queued_to_processing(tmp_path: Path) -> None:
     assert image.failure_reason is None
 
 
+def test_run_inference_is_idempotent_on_redelivery(tmp_path: Path) -> None:
+    """Worker Restart Safety (acks_late): a task can be redelivered after already committing
+    its PROCESSING transition. Re-running it must not fail — PROCESSING -> PROCESSING isn't a
+    valid transition, so a naive re-apply would raise and wrongly mark the image FAILED.
+    """
+    image_path = tmp_path / "board.jpg"
+    image_path.write_bytes(b"fake-image-bytes")
+    image_id = _run(_create_image(original_path=str(image_path)))
+
+    run_inference.apply(args=[str(image_id)])
+    result = run_inference.apply(args=[str(image_id)])
+
+    assert not result.failed()
+    image = _run(_get_image(image_id))
+    assert image is not None
+    assert image.status == ImageStatus.PROCESSING
+    assert image.failure_reason is None
+
+
 # --- Retry behavior and failure isolation -----------------------------------------------------
 
 
@@ -160,3 +179,21 @@ def test_permanent_failure_is_not_retried(tmp_path: Path) -> None:
     assert image.status == ImageStatus.FAILED
     assert image.failure_reason == "not a transient error"
     assert image_path.read_bytes() == original_bytes
+
+
+def test_on_failure_does_not_raise_when_image_already_completed(tmp_path: Path) -> None:
+    """`on_failure` persisting FAILED is best-effort: if the image already reached a terminal
+    status through another path, `mark_failed` raises `InvalidTransitionError` — that must be
+    swallowed (and logged), not escape from inside Celery's own failure-handling callback and
+    mask the task's real exception.
+    """
+    image_path = tmp_path / "board.jpg"
+    image_path.write_bytes(b"fake-image-bytes")
+    image_id = _run(_create_image(original_path=str(image_path), status=ImageStatus.COMPLETED))
+
+    result = _permanent_failure.apply(args=[str(image_id)])
+
+    assert result.failed()  # the task's own failure is still reported
+    image = _run(_get_image(image_id))
+    assert image is not None
+    assert image.status == ImageStatus.COMPLETED  # left untouched, not silently overwritten

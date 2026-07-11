@@ -22,8 +22,13 @@ async def _run_inference_async(inspection_image_id: str) -> None:
         image = await db.get(InspectionImage, uuid.UUID(inspection_image_id))
         if image is None:
             return
-        transition(image, ImageStatus.PROCESSING)
-        await db.commit()
+        # Idempotent against redelivery (acks_late/reject_on_worker_lost, NFR-03): if a
+        # previous attempt already committed this transition before its worker died, treat
+        # PROCESSING as already reached rather than re-applying — QUEUED->PROCESSING is not
+        # a valid self-transition, and would otherwise fail the retried task permanently.
+        if image.status is ImageStatus.QUEUED:
+            transition(image, ImageStatus.PROCESSING)
+            await db.commit()
 
 
 @celery_app.task(bind=True, base=PipelineTask, name="app.tasks.pipeline.run_agent_analysis")
