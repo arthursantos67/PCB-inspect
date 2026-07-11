@@ -78,7 +78,10 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const session = getSession();
   const headers = new Headers(init.headers);
-  headers.set("Content-Type", "application/json");
+  // Leave FormData bodies alone — the browser sets the multipart boundary itself.
+  if (!(init.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
   if (session) headers.set("Authorization", `Bearer ${session.accessToken}`);
 
   const response = await fetch(`${API_URL}${path}`, { ...init, headers });
@@ -123,4 +126,76 @@ export async function login(payload: { email: string; password: string }): Promi
 
 export function logout(): void {
   setSession(null);
+}
+
+// --- Ingestion (FR-03, FE-05) -----------------------------------------------------------
+
+export type FileOutcome = "ingested" | "duplicate" | "failed" | "skipped";
+
+export type FileResult = {
+  path: string;
+  outcome: FileOutcome;
+  image_id: string | null;
+  reason: string | null;
+};
+
+export type ScanSummary = {
+  path: string;
+  discovered: number;
+  ingested: number;
+  duplicate: number;
+  failed: number;
+  skipped: number;
+  files: FileResult[];
+};
+
+export type ImportSummary = {
+  ingested: number;
+  duplicate: number;
+  failed: number;
+  files: FileResult[];
+};
+
+export type WatchStatus = "watching" | "paused" | "not_configured" | "error";
+
+export type IngestionStatus = {
+  status: WatchStatus;
+  watch_root_path: string | null;
+  watch_mode_enabled: boolean;
+  files_discovered: number;
+  files_ingested: number;
+  files_failed: number;
+  detail: string | null;
+};
+
+export async function getIngestionStatus(): Promise<IngestionStatus> {
+  return apiFetch("/api/v1/inspections/ingestion-status");
+}
+
+export async function scanDirectory(path: string): Promise<ScanSummary> {
+  return apiFetch("/api/v1/inspections/scan", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
+export async function importFiles(files: File[]): Promise<ImportSummary> {
+  const formData = new FormData();
+  for (const file of files) formData.append("files", file);
+  return apiFetch("/api/v1/inspections/import", { method: "POST", body: formData });
+}
+
+// --- Settings config (FR-13, scoped to ingestion keys for now) -------------------------
+
+export type ConfigResponse = { config: Record<string, unknown> };
+
+export async function getConfig(): Promise<ConfigResponse> {
+  return apiFetch("/api/v1/settings/config");
+}
+
+export async function updateConfig(config: Record<string, unknown>): Promise<ConfigResponse> {
+  return apiFetch("/api/v1/settings/config", {
+    method: "PATCH",
+    body: JSON.stringify({ config }),
+  });
 }

@@ -45,6 +45,7 @@ async def seed() -> None:
             "llm.model": settings.llm_model,
             "llm.timeout_s": settings.llm_timeout_s,
             "watch_root_path": str(settings.watch_root),
+            "watch_mode_enabled": True,
         }
         for key, value in config_values.items():
             existing_config = await session.scalar(

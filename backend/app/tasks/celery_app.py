@@ -8,7 +8,12 @@ celery_app = Celery(
     "pcb_inspect",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.tasks.pipeline", "app.tasks.retention", "app.tasks.alert_monitor"],
+    include=[
+        "app.tasks.pipeline",
+        "app.tasks.retention",
+        "app.tasks.alert_monitor",
+        "app.tasks.ingestion",
+    ],
 )
 
 celery_app.conf.update(
@@ -29,6 +34,10 @@ celery_app.conf.update(
         "alert-monitor": {
             "task": "app.tasks.alert_monitor.evaluate_thresholds",
             "schedule": 300.0,  # every 5 minutes; see FR-19
+        },
+        "watch-root-poll": {
+            "task": "app.tasks.ingestion.poll_watch_root",
+            "schedule": 5.0,  # watch mode (continuous), see FR-03
         },
     },
 )
