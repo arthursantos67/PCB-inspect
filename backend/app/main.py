@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.analyses.router import router as analyses_router
 from app.auth.router import router as auth_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
@@ -31,6 +32,7 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(ingestion_router)
 app.include_router(settings_router)
+app.include_router(analyses_router)
 
 
 @app.get("/health", response_model=HealthReport, tags=["support"])

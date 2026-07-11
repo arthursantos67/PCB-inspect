@@ -18,8 +18,9 @@ from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
 from app.inference.detect import RawDetection
-from app.models import Detection, InspectionImage, ModelVersion
-from app.models.enums import ImageStatus
+from app.knowledge.defects import DEFECT_KNOWLEDGE_BASE
+from app.models import Analysis, Detection, InspectionImage, ModelVersion
+from app.models.enums import AnalysisSource, AnalysisStatus, DefectType, ImageStatus
 from app.tasks.base import PipelineTask
 from app.tasks.celery_app import celery_app
 from app.tasks.db import task_db_session
@@ -56,6 +57,20 @@ async def _count_detections(image_id: uuid.UUID) -> int:
         return (
             await db.scalar(
                 select(func.count()).select_from(Detection).where(Detection.image_id == image_id)
+            )
+        ) or 0
+
+
+async def _get_analysis(image_id: uuid.UUID) -> Analysis | None:
+    async with task_db_session() as db:
+        return await db.scalar(select(Analysis).where(Analysis.image_id == image_id))
+
+
+async def _count_analyses(image_id: uuid.UUID) -> int:
+    async with task_db_session() as db:
+        return (
+            await db.scalar(
+                select(func.count()).select_from(Analysis).where(Analysis.image_id == image_id)
             )
         ) or 0
 
@@ -120,7 +135,9 @@ def test_pipeline_tasks_ack_late_and_requeue_on_worker_loss() -> None:
 def test_run_inference_reaches_completed_with_no_reportable_detections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """FR-05's no-defect path: PROCESSING -> COMPLETED directly, skipping DETECTED."""
+    """FR-05's no-defect path: PROCESSING -> COMPLETED directly, skipping DETECTED. No
+    `Analysis` row is ever created for it (Issue 7's No-Defect Path acceptance criterion).
+    """
     _stub_inference(monkeypatch, detections=[])
     _run(_seed_active_model_version())
 
@@ -136,6 +153,7 @@ def test_run_inference_reaches_completed_with_no_reportable_detections(
     assert image.annotated_path is None
     assert image.failure_reason is None
     assert len(_FakeYOLO.instances) == 1  # warm start: the model is loaded exactly once (RV-01)
+    assert _run(_count_analyses(image_id)) == 0
 
 
 def test_run_inference_is_idempotent_on_redelivery(
@@ -166,9 +184,50 @@ def test_run_inference_is_idempotent_on_redelivery(
     assert not result.failed()
     image = _run(_get_image(image_id))
     assert image is not None
-    assert image.status == ImageStatus.DETECTED
+    # A reportable detection drives the image all the way to COMPLETED in one task run — the
+    # baseline analysis (Issue 7) is synchronous, so there's no ANALYZING stopover to observe.
+    assert image.status == ImageStatus.COMPLETED
     assert image.failure_reason is None
     assert _run(_count_detections(image_id)) == 1  # not duplicated by the redelivered attempt
+    assert _run(_count_analyses(image_id)) == 1  # not duplicated by the redelivered attempt
+
+
+# --- Baseline analysis generation (FR-06's baseline tier, Issue 7) ----------------------------
+
+
+def test_run_inference_creates_baseline_analysis_for_reportable_detection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bbox = {"x1": 0.1, "y1": 0.1, "x2": 0.5, "y2": 0.5}
+    _stub_inference(
+        monkeypatch,
+        detections=[RawDetection(defect_type="mouse_bite", confidence=0.9, bbox=bbox)],
+    )
+    _run(_seed_active_model_version())
+    monkeypatch.setattr(
+        "app.tasks.pipeline.get_settings",
+        lambda: get_settings().model_copy(update={"app_data_dir": tmp_path}),
+    )
+
+    image_path = tmp_path / "board.jpg"
+    Image.new("RGB", (64, 64), (0, 0, 0)).save(image_path, format="JPEG")
+    image_id = _run(_create_image(original_path=str(image_path)))
+
+    run_inference.apply(args=[str(image_id)])
+
+    image = _run(_get_image(image_id))
+    assert image is not None
+    assert image.status == ImageStatus.COMPLETED  # instant availability, no ANALYZING (NFR-01)
+
+    analysis = _run(_get_analysis(image_id))
+    assert analysis is not None
+    assert analysis.source == AnalysisSource.KNOWLEDGE_BASE
+    assert analysis.status == AnalysisStatus.COMPLETED
+    entry = DEFECT_KNOWLEDGE_BASE[DefectType.MOUSE_BITE]
+    assert analysis.severity_max == entry.severity
+    assert analysis.per_defect is not None
+    assert analysis.per_defect[0]["description"] == entry.description
+    assert analysis.per_defect[0]["severity"] == entry.severity.value
 
 
 # --- Retry behavior and failure isolation -----------------------------------------------------

@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -6,13 +7,14 @@ from PIL import Image
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analyses.service import create_baseline_analysis
 from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.ingestion import service as ingestion_service
 from app.ingestion.naming import infer_batch_and_board
 from app.ingestion.watcher import poll_watch_root_once
 from app.main import app as fastapi_app
-from app.models import Batch, Board, InspectionImage
+from app.models import Batch, Board, Detection, InspectionImage, ModelVersion
 from app.models.enums import ImageSource, ImageStatus
 
 ACCOUNT = {
@@ -495,6 +497,50 @@ async def test_get_progress_returns_current_status(
     assert body["id"] == image_id
     assert body["status"] == "QUEUED"
     assert body["failure_reason"] is None
+    assert body["analysis"] is None  # no baseline analysis until detection completes (FR-06)
+
+
+async def test_get_progress_includes_analysis_once_baseline_completes(
+    client: AsyncClient, db_session: AsyncSession, watch_root: Path
+) -> None:
+    """Scope item 3, Issue 7: `analysis` is embedded in the inspection detail (section 11.5)
+    once the knowledge-base baseline analysis exists for the image.
+    """
+    token = await _setup_account(client)
+    model_version = ModelVersion(version="v1.0.0", weights_path="/weights/best.pt", is_active=True)
+    db_session.add(model_version)
+    await db_session.flush()
+    image = InspectionImage(
+        source=ImageSource.WATCH_FOLDER,
+        original_path=str(watch_root / "board.jpg"),
+        checksum_sha256="deadbeef",
+        status=ImageStatus.DETECTED,
+    )
+    db_session.add(image)
+    await db_session.flush()
+    detection = Detection(
+        image_id=image.id,
+        defect_type="short",
+        bbox={"x1": 0.1, "y1": 0.1, "x2": 0.4, "y2": 0.4},
+        confidence=Decimal("0.900"),
+        is_reported=True,
+        model_version_id=model_version.id,
+    )
+    db_session.add(detection)
+    await db_session.flush()
+    await create_baseline_analysis(db_session, image, [detection])
+    await db_session.commit()
+
+    response = await client.get(
+        f"/api/v1/inspections/{image.id}", headers=_auth_headers(token)
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "COMPLETED"
+    assert body["analysis"]["source"] == "knowledge_base"
+    assert body["analysis"]["status"] == "COMPLETED"
+    assert body["analysis"]["per_defect"][0]["detection_id"] == str(detection.id)
 
 
 async def test_get_progress_returns_404_for_unknown_id(client: AsyncClient) -> None:
