@@ -60,6 +60,30 @@ def isolated_app_data_dir(tmp_path: Path):
     fastapi_app.dependency_overrides.pop(get_settings, None)
 
 
+class _FakeInferenceTask:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.fail_next_n: int = 0
+
+    def delay(self, inspection_image_id: str) -> None:
+        if self.fail_next_n > 0:
+            self.fail_next_n -= 1
+            raise ConnectionError("broker unreachable")
+        self.calls.append(inspection_image_id)
+
+
+@pytest.fixture(autouse=True)
+def enqueue_stub(monkeypatch: pytest.MonkeyPatch) -> _FakeInferenceTask:
+    """Stubs the Celery enqueue call (FR-04) for every ingestion test: there's no Redis
+    broker here, and running the real task eagerly would recurse `asyncio.run()` into the
+    event loop already driving this async request/test — the task itself is covered in
+    isolation by `tests/test_pipeline_tasks.py`.
+    """
+    stub = _FakeInferenceTask()
+    monkeypatch.setattr(ingestion_service, "run_inference", stub)
+    return stub
+
+
 # --- Naming convention (pure unit tests, no DB) ---------------------------------------------
 
 
@@ -363,3 +387,121 @@ async def test_ingestion_status_reports_watching_state_and_counts(
     assert body["files_discovered"] == 1
     assert body["files_ingested"] == 1
     assert body["files_failed"] == 0
+
+
+# --- Enqueue on ingestion (FR-04) ------------------------------------------------------------
+
+
+async def test_scan_enqueues_every_ingested_image(
+    client: AsyncClient, watch_root: Path, enqueue_stub: _FakeInferenceTask
+) -> None:
+    token = await _setup_account(client)
+    batch_dir = watch_root / "BATCH-001"
+    batch_dir.mkdir()
+    _write_jpeg(batch_dir / "board-1.jpg")
+    _write_png(batch_dir / "board-2.png")
+
+    response = await client.post(
+        "/api/v1/inspections/scan", json={"path": str(watch_root)}, headers=_auth_headers(token)
+    )
+
+    body = response.json()
+    ingested_ids = {f["image_id"] for f in body["files"] if f["outcome"] == "ingested"}
+    assert len(ingested_ids) == 2
+    assert set(enqueue_stub.calls) == {str(i) for i in ingested_ids}
+
+
+async def test_scan_does_not_enqueue_duplicate_or_failed_files(
+    client: AsyncClient, watch_root: Path, enqueue_stub: _FakeInferenceTask
+) -> None:
+    token = await _setup_account(client)
+    batch_dir = watch_root / "BATCH-001"
+    batch_dir.mkdir()
+    _write_jpeg(batch_dir / "good.jpg")
+    (batch_dir / "corrupted.jpg").write_bytes(b"not-an-image")
+
+    await client.post(
+        "/api/v1/inspections/scan", json={"path": str(watch_root)}, headers=_auth_headers(token)
+    )
+
+    assert len(enqueue_stub.calls) == 1  # only the valid image is enqueued
+
+
+async def test_scan_still_succeeds_and_enqueues_the_rest_when_one_enqueue_fails(
+    client: AsyncClient, watch_root: Path, enqueue_stub: _FakeInferenceTask
+) -> None:
+    token = await _setup_account(client)
+    batch_dir = watch_root / "BATCH-001"
+    batch_dir.mkdir()
+    _write_jpeg(batch_dir / "board-1.jpg")
+    _write_png(batch_dir / "board-2.png")
+    enqueue_stub.fail_next_n = 1  # simulates a broker hiccup on the first enqueue call
+
+    response = await client.post(
+        "/api/v1/inspections/scan", json={"path": str(watch_root)}, headers=_auth_headers(token)
+    )
+
+    # A broker failure enqueuing one already-committed row must not 500 the request (both
+    # rows are durably QUEUED regardless), and must not stop the rest of the batch from
+    # being enqueued (FR-04, section 3.7).
+    assert response.status_code == 202
+    assert response.json()["ingested"] == 2
+    assert len(enqueue_stub.calls) == 1  # the failed one was logged and skipped, not retried here
+
+
+async def test_import_enqueues_the_ingested_file(
+    client: AsyncClient,
+    tmp_path: Path,
+    isolated_app_data_dir: Path,
+    enqueue_stub: _FakeInferenceTask,
+) -> None:
+    token = await _setup_account(client)
+    stray = tmp_path / "stray.png"
+    _write_png(stray)
+
+    with stray.open("rb") as fh:
+        response = await client.post(
+            "/api/v1/inspections/import",
+            files={"files": ("stray.png", fh, "image/png")},
+            headers=_auth_headers(token),
+        )
+
+    image_id = response.json()["files"][0]["image_id"]
+    assert enqueue_stub.calls == [image_id]
+
+
+# --- Progress query (FR-04) ------------------------------------------------------------------
+
+
+async def test_get_progress_returns_current_status(
+    client: AsyncClient, watch_root: Path
+) -> None:
+    token = await _setup_account(client)
+    batch_dir = watch_root / "BATCH-001"
+    batch_dir.mkdir()
+    _write_jpeg(batch_dir / "board-1.jpg")
+
+    scan_response = await client.post(
+        "/api/v1/inspections/scan", json={"path": str(watch_root)}, headers=_auth_headers(token)
+    )
+    image_id = scan_response.json()["files"][0]["image_id"]
+
+    progress = await client.get(
+        f"/api/v1/inspections/{image_id}", headers=_auth_headers(token)
+    )
+
+    assert progress.status_code == 200
+    body = progress.json()
+    assert body["id"] == image_id
+    assert body["status"] == "QUEUED"
+    assert body["failure_reason"] is None
+
+
+async def test_get_progress_returns_404_for_unknown_id(client: AsyncClient) -> None:
+    token = await _setup_account(client)
+    response = await client.get(
+        "/api/v1/inspections/00000000-0000-0000-0000-000000000000",
+        headers=_auth_headers(token),
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "INSPECTION_NOT_FOUND"

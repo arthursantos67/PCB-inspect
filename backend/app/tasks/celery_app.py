@@ -17,6 +17,10 @@ celery_app = Celery(
 )
 
 celery_app.conf.update(
+    # NFR-03: a task in progress when its worker dies returns to the queue instead of
+    # being lost, rather than being acked (and dropped) the moment it's picked up.
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
     task_default_queue="agents",
     task_queues={
         "inference": {"exchange": "inference", "routing_key": "inference"},
