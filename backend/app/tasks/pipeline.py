@@ -7,6 +7,7 @@ from celery.signals import worker_ready
 
 from app.analyses.service import create_baseline_analysis
 from app.core.config import get_settings
+from app.events.publisher import publish_event
 from app.inference.model import ensure_model_loaded
 from app.inference.service import process_image
 from app.inspections.state import transition
@@ -58,9 +59,25 @@ async def _run_inference_async(inspection_image_id: str) -> None:
         # (empty otherwise, per its own contract) — checking this instead of re-reading
         # `image.status` also sidesteps a stale mypy literal-narrowing false positive from
         # the `PROCESSING` guard above, which a call into another function can't invalidate.
+        analysis = None
         if reportable_detections:
-            await create_baseline_analysis(db, image, reportable_detections)
+            analysis = await create_baseline_analysis(db, image, reportable_detections)
         await db.commit()
+
+        # Published only after commit (FR-14): a listening client must never observe an
+        # event for a row it can't yet read back.
+        await publish_event(
+            "detection.completed", {"id": str(image.id), "status": image.status.value}
+        )
+        if analysis is not None:
+            await publish_event(
+                "analysis.completed",
+                {
+                    "id": str(image.id),
+                    "status": image.status.value,
+                    "analysis_id": str(analysis.id),
+                },
+            )
 
 
 @worker_ready.connect
