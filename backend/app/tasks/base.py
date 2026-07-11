@@ -5,6 +5,7 @@ from typing import Any
 
 from celery import Task
 
+from app.events.publisher import publish_event
 from app.inspections.state import mark_failed
 from app.models import InspectionImage
 from app.tasks.db import task_db_session
@@ -61,3 +62,6 @@ async def _mark_failed_async(inspection_image_id: str, reason: str) -> None:
             return
         mark_failed(image, reason)
         await db.commit()
+        await publish_event(
+            "inspection.failed", {"id": str(image.id), "status": "FAILED", "reason": reason}
+        )

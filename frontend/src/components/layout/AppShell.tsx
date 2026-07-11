@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/contexts/AuthContext";
+import { type EventStreamStatus, useEventStream } from "@/hooks/useEventStream";
 
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/" },
@@ -15,8 +16,16 @@ const NAV_ITEMS = [
   { label: "Settings", href: "/settings/accounts" },
 ] as const;
 
+const STATUS_LABEL: Record<EventStreamStatus, string> = {
+  connecting: "live updates: connecting…",
+  connected: "live updates: connected",
+  reconnecting: "live updates: reconnecting…",
+  disconnected: "live updates: not connected",
+};
+
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuth();
+  const { user, logout, isAuthenticated } = useAuth();
+  const eventStreamStatus = useEventStream(isAuthenticated);
 
   return (
     <div className="flex min-h-screen">
@@ -36,7 +45,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
       <div className="flex flex-1 flex-col">
         <header className="flex items-center justify-between border-b px-6 py-3">
-          <Badge variant="outline">live updates: not connected</Badge>
+          <Badge variant={eventStreamStatus === "connected" ? "default" : "outline"}>
+            {STATUS_LABEL[eventStreamStatus]}
+          </Badge>
           <div className="flex items-center gap-3">
             <span className="text-sm text-muted-foreground">
               {user?.full_name ?? "local account"}

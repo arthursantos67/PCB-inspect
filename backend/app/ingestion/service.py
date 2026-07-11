@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
+from app.events.publisher import publish_event
 from app.ingestion.naming import infer_batch_and_board, iter_batch_files
 from app.ingestion.schemas import (
     FileResult,
@@ -158,15 +159,16 @@ async def _ingest_batch_file(
 
 
 async def _enqueue_ingested(results: list[FileResult]) -> None:
-    """Enqueues each newly-ingested image for inference (FR-04) only after its row has been
-    committed — the worker runs in a separate process/connection and won't see an
-    uncommitted row, so this must never run before `db.commit()`.
+    """Enqueues each newly-ingested image for inference (FR-04) and publishes its SSE event
+    (FR-14) only after its row has been committed — the worker (and any listening client)
+    runs in a separate process/connection and won't see an uncommitted row, so this must
+    never run before `db.commit()`.
 
-    Ingestion has already succeeded by the time this runs (the rows are durably `QUEUED`),
-    so a broker hiccup enqueuing one image must not fail the whole request or stop the rest
-    of the batch from being enqueued — it's logged and the loop continues. `.delay()` is a
-    blocking network round-trip to Redis; offloading it to a thread keeps a large batch from
-    stalling the event loop for every other concurrent request.
+    Ingestion has already succeeded by the time this runs (the rows are durably `QUEUED` or
+    `FAILED`), so a broker/Redis hiccup here must not fail the whole request or stop the rest
+    of the batch from being processed — both are best-effort, logged and skipped rather than
+    raised. `.delay()` is a blocking network round-trip to Redis; offloading it to a thread
+    keeps a large batch from stalling the event loop for every other concurrent request.
     """
     for result in results:
         if result.outcome == "ingested" and result.image_id is not None:
@@ -176,6 +178,14 @@ async def _enqueue_ingested(results: list[FileResult]) -> None:
                 logger.exception(
                     "Failed to enqueue inference for inspection_image_id=%s", result.image_id
                 )
+            await publish_event(
+                "inspection.created", {"id": str(result.image_id), "status": "QUEUED"}
+            )
+        elif result.outcome == "failed" and result.image_id is not None:
+            await publish_event(
+                "inspection.failed",
+                {"id": str(result.image_id), "status": "FAILED", "reason": result.reason},
+            )
 
 
 async def scan_directory(db: AsyncSession, path: Path, *, source: ImageSource) -> ScanSummary:
