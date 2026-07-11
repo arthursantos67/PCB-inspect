@@ -32,6 +32,7 @@ from app.ingestion.validation import (
 )
 from app.models import Batch, Board, InspectionImage
 from app.models.enums import ImageSource, ImageStatus
+from app.tasks.pipeline import run_inference
 
 DEFAULT_IMPORT_MAX_SIZE_MB = 25
 
@@ -152,6 +153,16 @@ async def _ingest_batch_file(
     return FileResult(path=original_path, outcome="ingested", image_id=image.id)
 
 
+def _enqueue_ingested(results: list[FileResult]) -> None:
+    """Enqueues each newly-ingested image for inference (FR-04) only after its row has been
+    committed — the worker runs in a separate process/connection and won't see an
+    uncommitted row, so this must never run before `db.commit()`.
+    """
+    for result in results:
+        if result.outcome == "ingested" and result.image_id is not None:
+            run_inference.delay(str(result.image_id))
+
+
 async def scan_directory(db: AsyncSession, path: Path, *, source: ImageSource) -> ScanSummary:
     """Shared by both the one-off `/scan` endpoint and each watch-mode poll (`source` differs
     only in which value is stamped on the resulting `InspectionImage.source`).
@@ -161,6 +172,7 @@ async def scan_directory(db: AsyncSession, path: Path, *, source: ImageSource) -
     files = iter_batch_files(path)
     results = [await _ingest_batch_file(db, root=path, file_path=f, source=source) for f in files]
     await db.commit()
+    _enqueue_ingested(results)
 
     counts = Counter(r.outcome for r in results)
     return ScanSummary(
@@ -258,6 +270,8 @@ async def import_files(
         results.append(FileResult(path=display_name, outcome="ingested", image_id=image.id))
 
     await db.commit()
+    _enqueue_ingested(results)
+
     counts = Counter(r.outcome for r in results)
     return ImportSummary(
         ingested=counts["ingested"],
