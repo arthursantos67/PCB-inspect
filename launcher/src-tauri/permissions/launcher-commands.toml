@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-launcher-commands"
+description = """
+Allows invoking the launcher's own commands: reading the resolved frontend/health URLs,
+retrying the startup flow after an error, and stopping the Docker Compose stack from the
+splash window's Retry button / tray menu.
+"""
+commands.allow = ["get_launcher_config", "retry_startup", "stop_stack_command"]
