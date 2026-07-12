@@ -1,3 +1,8 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+
 import { DefectBadge } from "@/components/dashboard/DefectBadge";
 import { SeverityBadge } from "@/components/dashboard/SeverityBadge";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
@@ -20,6 +25,8 @@ export function InspectionTable({
   isLoading: boolean;
   isError?: boolean;
 }) {
+  const router = useRouter();
+
   if (!isLoading && items.length === 0) {
     return (
       <p className="py-8 text-center text-sm text-muted-foreground">
@@ -42,8 +49,16 @@ export function InspectionTable({
       </TableHeader>
       <TableBody>
         {items.map((item) => (
-          <TableRow key={item.id}>
-            <TableCell className="font-medium">{item.board_number ?? "—"}</TableCell>
+          <TableRow
+            key={item.id}
+            className="cursor-pointer"
+            onClick={() => router.push(`/inspections/${item.id}`)}
+          >
+            <TableCell className="font-medium">
+              <Link href={`/inspections/${item.id}`} className="hover:underline focus-visible:underline">
+                {item.board_number ?? "—"}
+              </Link>
+            </TableCell>
             <TableCell className="text-muted-foreground">{item.batch_number ?? "—"}</TableCell>
             <TableCell>
               {item.defect_types.length === 0 ? (

@@ -42,13 +42,76 @@ class LoadedModel:
 _loaded: LoadedModel | None = None
 
 
+class _FakeBoxScalar:
+    """Mimics the `.item()` surface of an ultralytics box's `cls`/`conf` tensors."""
+
+    def __init__(self, value: float) -> None:
+        self._value = value
+
+    def item(self) -> float:
+        return self._value
+
+
+class _FakeBoxCoords:
+    """Mimics the `.tolist()` surface of an ultralytics box's `xyxyn[0]` tensor."""
+
+    def __init__(self, values: list[float]) -> None:
+        self._values = values
+
+    def tolist(self) -> list[float]:
+        return self._values
+
+
+class _FakeBox:
+    def __init__(self, cls_idx: int, confidence: float, xyxyn: list[float]) -> None:
+        self.cls = _FakeBoxScalar(cls_idx)
+        self.conf = _FakeBoxScalar(confidence)
+        self.xyxyn = [_FakeBoxCoords(xyxyn)]
+
+
+class _FakeResult:
+    def __init__(self, names: dict[int, str], boxes: list[_FakeBox]) -> None:
+        self.names = names
+        self.boxes = boxes
+
+
+class _FakeYOLO:
+    """Deterministic stand-in for `ultralytics.YOLO`, used only when
+    `settings.inference_backend == "fake"`. Real inference needs `weights/best.pt` (a
+    114MB artifact not tracked in git, README) and CI runners have no GPU — this is what
+    lets the Playwright E2E suite (NFR-08, section 14.2) exercise ingestion -> processing ->
+    detail view without either. Always reports one `short` defect over the image center,
+    honoring the confidence floor passed to `predict()` so RV-03's threshold split is still
+    exercised end to end.
+    """
+
+    _CONFIDENCE = 0.9
+    _BBOX = [0.3, 0.3, 0.7, 0.7]
+
+    def __init__(self, weights_path: str) -> None:
+        self.weights_path = weights_path
+
+    def to(self, device: str) -> "_FakeYOLO":
+        return self
+
+    def predict(self, *, source: str, conf: float, verbose: bool = False) -> list[_FakeResult]:
+        boxes = [_FakeBox(0, self._CONFIDENCE, self._BBOX)] if conf <= self._CONFIDENCE else []
+        return [_FakeResult(names={0: "short"}, boxes=boxes)]
+
+
 def _yolo_class() -> Any:
+    if get_settings().inference_backend == "fake":
+        return _FakeYOLO
+
     from ultralytics import YOLO
 
     return YOLO
 
 
 def _select_device() -> str:
+    if get_settings().inference_backend == "fake":
+        return "cpu"
+
     import torch
 
     return "cuda" if torch.cuda.is_available() else "cpu"

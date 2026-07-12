@@ -17,7 +17,8 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.inference.detect import RawDetection
+from app.core.config import get_settings
+from app.inference.detect import RawDetection, detect
 from app.inference.model import LoadedModel, ensure_model_loaded
 from app.inference.service import process_image
 from app.models import Detection, InspectionImage, ModelVersion, SystemConfig
@@ -246,3 +247,43 @@ async def test_ensure_model_loaded_warm_starts_once_and_caches(
 async def test_ensure_model_loaded_raises_transient_error_without_active_version() -> None:
     with pytest.raises(TransientProcessingError):
         await ensure_model_loaded()
+
+
+# --- Fake inference backend (Playwright E2E, section 14.2) -----------------------------------
+#
+# `settings.inference_backend == "fake"` swaps `_yolo_class()`/`_select_device()` for a
+# deterministic stand-in (no `weights/best.pt`, no GPU) — unlike every test above, which
+# monkeypatches `detect()` itself away, these exercise the real `detect()` contract against
+# the fake model to prove the substitution actually satisfies it.
+
+
+async def test_fake_inference_backend_produces_deterministic_short_detection(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, board_image: Path
+) -> None:
+    await _make_model_version(db_session)
+    await db_session.commit()
+    fake_settings = get_settings().model_copy(update={"inference_backend": "fake"})
+    monkeypatch.setattr("app.inference.model.get_settings", lambda: fake_settings)
+
+    loaded = await ensure_model_loaded()
+    assert loaded.device == "cpu"
+
+    detections = detect(loaded.model, board_image, min_confidence=0.25)
+
+    assert len(detections) == 1
+    assert detections[0].defect_type == "short"
+    assert detections[0].confidence == pytest.approx(0.9)
+    assert detections[0].bbox == {"x1": 0.3, "y1": 0.3, "x2": 0.7, "y2": 0.7}
+
+
+async def test_fake_inference_backend_respects_confidence_floor(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, board_image: Path
+) -> None:
+    await _make_model_version(db_session)
+    await db_session.commit()
+    fake_settings = get_settings().model_copy(update={"inference_backend": "fake"})
+    monkeypatch.setattr("app.inference.model.get_settings", lambda: fake_settings)
+
+    loaded = await ensure_model_loaded()
+
+    assert detect(loaded.model, board_image, min_confidence=0.95) == []

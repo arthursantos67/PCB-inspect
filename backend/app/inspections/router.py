@@ -1,16 +1,26 @@
 import uuid
 from datetime import datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import FileResponse
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analyses.schemas import AnalysisOut
 from app.auth.dependencies import get_current_user
+from app.core.errors import ApiError
 from app.db.session import get_db
 from app.inspections.filters import InspectionFilters, Ordering, apply_filters, order_by_clauses
-from app.inspections.schemas import InspectionListItem, PaginatedInspections
-from app.models import Analysis, Batch, Board, Detection, InspectionImage, User
+from app.inspections.schemas import (
+    DetectionOut,
+    InspectionBoard,
+    InspectionDetail,
+    InspectionListItem,
+    PaginatedInspections,
+)
+from app.models import Analysis, Batch, Board, Detection, InspectionImage, ModelVersion, User
 from app.models.enums import DefectType, ImageStatus, Severity
 
 router = APIRouter(prefix="/api/v1/inspections", tags=["inspections"])
@@ -117,3 +127,94 @@ async def list_inspections(
         previous=_page_url(request, page - 1, page_size) if page > 1 else None,
         results=results,
     )
+
+
+@router.get("/{inspection_id}", response_model=InspectionDetail)
+async def get_inspection(
+    inspection_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+) -> InspectionDetail:
+    """Full detail for the analysis detail screen (FE-03, section 11.5); also FR-04's
+    progress-polling fallback to SSE — `detections`/`analysis` are just empty/`None` until
+    the pipeline reaches that stage.
+    """
+    row = (
+        await db.execute(
+            select(InspectionImage, Board, Batch)
+            .select_from(InspectionImage)
+            .outerjoin(Board, InspectionImage.board_id == Board.id)
+            .outerjoin(Batch, Board.batch_id == Batch.id)
+            .where(InspectionImage.id == inspection_id)
+        )
+    ).first()
+    if row is None:
+        raise ApiError("INSPECTION_NOT_FOUND", "Inspection image not found.", 404)
+    image, board, batch = row
+
+    analysis = await db.scalar(select(Analysis).where(Analysis.image_id == inspection_id))
+
+    detection_rows = (
+        await db.execute(
+            select(Detection, ModelVersion.version)
+            .join(ModelVersion, Detection.model_version_id == ModelVersion.id)
+            .where(Detection.image_id == inspection_id, Detection.is_reported.is_(True))
+            .order_by(Detection.id)
+        )
+    ).all()
+
+    duration_ms = None
+    if image.processed_at is not None:
+        duration_ms = int((image.processed_at - image.created_at).total_seconds() * 1000)
+
+    return InspectionDetail(
+        id=image.id,
+        status=image.status,
+        board=InspectionBoard(
+            board_number=board.board_number if board is not None else None,
+            batch_number=batch.batch_number if batch is not None else None,
+        ),
+        failure_reason=image.failure_reason,
+        created_at=image.created_at,
+        processed_at=image.processed_at,
+        duration_ms=duration_ms,
+        detections=[
+            DetectionOut(
+                id=detection.id,
+                defect_type=detection.defect_type,
+                bbox=detection.bbox,
+                confidence=detection.confidence,
+                is_reported=detection.is_reported,
+                model_version=version,
+            )
+            for detection, version in detection_rows
+        ],
+        analysis=AnalysisOut.model_validate(analysis) if analysis is not None else None,
+    )
+
+
+@router.get("/{inspection_id}/image")
+async def get_inspection_image(
+    inspection_id: uuid.UUID,
+    variant: Literal["original", "annotated"] = Query(default="original"),
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+) -> FileResponse:
+    """Streams the image directly from local disk (section 3.1) — gated only by the
+    endpoint's own session auth, no expiring-URL mechanism needed.
+    """
+    image = await db.get(InspectionImage, inspection_id)
+    if image is None:
+        raise ApiError("INSPECTION_NOT_FOUND", "Inspection image not found.", 404)
+
+    path_str = image.original_path if variant == "original" else image.annotated_path
+    if path_str is None:
+        raise ApiError(
+            "INSPECTION_NOT_READY", "The annotated image has not been generated yet.", 409
+        )
+
+    path = Path(path_str)
+    if not path.is_file():
+        raise ApiError("RESOURCE_NOT_FOUND", "Image file not found on disk.", 404)
+
+    return FileResponse(path)

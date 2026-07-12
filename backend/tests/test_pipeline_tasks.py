@@ -61,6 +61,11 @@ async def _count_detections(image_id: uuid.UUID) -> int:
         ) or 0
 
 
+async def _get_detection(image_id: uuid.UUID) -> Detection | None:
+    async with task_db_session() as db:
+        return await db.scalar(select(Detection).where(Detection.image_id == image_id))
+
+
 async def _get_analysis(image_id: uuid.UUID) -> Analysis | None:
     async with task_db_session() as db:
         return await db.scalar(select(Analysis).where(Analysis.image_id == image_id))
@@ -228,6 +233,17 @@ def test_run_inference_creates_baseline_analysis_for_reportable_detection(
     assert analysis.per_defect is not None
     assert analysis.per_defect[0]["description"] == entry.description
     assert analysis.per_defect[0]["severity"] == entry.severity.value
+
+    # Regression: `process_image` must flush before returning the reportable `Detection`
+    # rows — without it, `Detection.id` (a Python-side `uuid.uuid4` default applied at
+    # INSERT time) is still `None` when the baseline analysis stamps `detection_id`, and
+    # every consumer that parses `per_defect` as `AnalysisOut` (e.g. `GET
+    # /api/v1/inspections/{id}`, FE-03) 500s trying to parse the literal string "None" as a
+    # UUID. Only caught by driving the real task end to end, not the unit-level helpers in
+    # test_inference.py that flush manually before calling `create_baseline_analysis`.
+    detection = _run(_get_detection(image_id))
+    assert detection is not None
+    assert analysis.per_defect[0]["detection_id"] == str(detection.id)
 
 
 # --- Retry behavior and failure isolation -----------------------------------------------------
