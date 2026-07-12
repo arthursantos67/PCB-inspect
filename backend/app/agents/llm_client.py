@@ -15,6 +15,7 @@ Every failure mode (unreachable endpoint, non-2xx response, malformed JSON) is n
 
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import httpx
@@ -37,6 +38,44 @@ class LLMClient(Protocol):
         result.
         """
         ...
+
+
+@dataclass(frozen=True)
+class ToolCallRequest:
+    """One function call the model asked for (issue #32's chat agent, section 5.4)."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ChatCompletion:
+    """One assistant turn from `ChatLLMClient.complete_chat`: either free-text `content`, or
+    one or more `tool_calls` to run before the model can produce a final answer — never both
+    populated at once in the OpenAI tool-calling contract this mirrors.
+    """
+
+    content: str | None
+    tool_calls: list[ToolCallRequest] = field(default_factory=list)
+
+
+class ChatLLMClient(Protocol):
+    async def complete_chat(
+        self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> ChatCompletion:
+        """Runs one multi-turn, tool-calling-capable completion call. Raises
+        `LLMUnavailableError` on any failure, exactly like `complete_json`.
+        """
+        ...
+
+
+class AgentLLMClient(LLMClient, ChatLLMClient, Protocol):
+    """Both capabilities together — what `build_llm_client` actually returns. The analysis
+    chain (`app.agents.chain`) only ever calls `complete_json` and the chat agent
+    (`app.chat.agent`) only ever calls `complete_chat`, so each keeps annotating its parameter
+    with just the narrower protocol it needs; this is only the shared factory's return type.
+    """
 
 
 class OpenAICompatibleClient:
@@ -91,10 +130,59 @@ class OpenAICompatibleClient:
         except json.JSONDecodeError as exc:
             raise LLMUnavailableError(f"LLM response content was not valid JSON: {exc}") from exc
 
+    async def complete_chat(
+        self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> ChatCompletion:
+        """Same endpoint as `complete_json`, but with the OpenAI tool-calling contract instead
+        of forced `json_object` output — the chat agent's turns are free text or tool calls,
+        never a single structured JSON blob (`app.chat.agent`).
+        """
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": 0.2,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout_s) as http_client:
+                response = await http_client.post(
+                    f"{self._base_url}/chat/completions", json=payload, headers=headers
+                )
+            response.raise_for_status()
+            body = response.json()
+            message = body["choices"][0]["message"]
+            usage_tokens = body.get("usage", {}).get("total_tokens")
+            if isinstance(usage_tokens, int):
+                self.total_tokens_used = (self.total_tokens_used or 0) + usage_tokens
+
+            raw_tool_calls = message.get("tool_calls") or []
+            tool_calls = [
+                ToolCallRequest(
+                    id=call["id"],
+                    name=call["function"]["name"],
+                    arguments=json.loads(call["function"]["arguments"] or "{}"),
+                )
+                for call in raw_tool_calls
+            ]
+            return ChatCompletion(content=message.get("content"), tool_calls=tool_calls)
+        except httpx.HTTPError as exc:
+            raise LLMUnavailableError(f"LLM endpoint unreachable: {exc}") from exc
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMUnavailableError(f"LLM response missing expected shape: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise LLMUnavailableError(
+                f"LLM tool call arguments were not valid JSON: {exc}"
+            ) from exc
+
 
 async def build_llm_client(
     db: AsyncSession, settings: Settings | None = None
-) -> LLMClient | None:
+) -> AgentLLMClient | None:
     """Reads connection details from dynamic config (issue #30's `llm.*` keys, falling back
     to env defaults), and builds a client for it.
 

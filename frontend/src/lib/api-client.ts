@@ -394,3 +394,125 @@ export type ImageVariant = "original" | "annotated";
 export function inspectionImagePath(id: string, variant: ImageVariant): string {
   return `/api/v1/inspections/${id}/image?variant=${variant}`;
 }
+
+// --- Chat (FR-09, FE-06) -----------------------------------------------------------------
+
+export type ChatRole = "user" | "assistant";
+
+export type ChatToolCall = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  result: unknown;
+};
+
+export type ChatMessage = {
+  id: string;
+  role: ChatRole;
+  content: string;
+  tool_calls: ChatToolCall[] | null;
+  created_at: string;
+};
+
+export type ChatSession = {
+  id: string;
+  title: string | null;
+  context_analysis_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChatSessionDetail = ChatSession & { messages: ChatMessage[] };
+
+export async function createChatSession(contextAnalysisId?: string): Promise<ChatSession> {
+  return apiFetch("/api/v1/chat/sessions", {
+    method: "POST",
+    body: JSON.stringify({ context_analysis_id: contextAnalysisId ?? null }),
+  });
+}
+
+export async function listChatSessions(): Promise<{ results: ChatSession[] }> {
+  return apiFetch("/api/v1/chat/sessions");
+}
+
+export async function getChatSession(id: string): Promise<ChatSessionDetail> {
+  return apiFetch(`/api/v1/chat/sessions/${id}`);
+}
+
+export async function deleteChatSession(id: string): Promise<void> {
+  await apiFetch(`/api/v1/chat/sessions/${id}`, { method: "DELETE" });
+}
+
+export type ChatStreamEvent =
+  | { type: "tool_call"; name: string; arguments: Record<string, unknown> }
+  | { type: "content_delta"; text: string }
+  | { type: "error"; message: string }
+  | { type: "done"; message: ChatMessage };
+
+function parseChatSseChunk(raw: string): ChatStreamEvent | null {
+  let eventType: string | null = null;
+  let dataRaw: string | null = null;
+  for (const line of raw.split("\n")) {
+    if (line.startsWith("event:")) eventType = line.slice("event:".length).trim();
+    else if (line.startsWith("data:")) dataRaw = line.slice("data:".length).trim();
+  }
+  if (!eventType || dataRaw === null) return null;
+  const data = JSON.parse(dataRaw);
+  switch (eventType) {
+    case "tool_call":
+      return { type: "tool_call", name: data.name, arguments: data.arguments };
+    case "content_delta":
+      return { type: "content_delta", text: data.text };
+    case "error":
+      return { type: "error", message: data.message };
+    case "done":
+      return { type: "done", message: data as ChatMessage };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Sends one chat turn and streams the response (FR-09, section 5.4) — incremental
+ * `content_delta`/`tool_call` events as they arrive, terminated by exactly one `done` (or an
+ * `error` immediately followed by `done`, UC-7's "LLM unavailable" alternative flow).
+ *
+ * Manual `fetch()` + SSE line reader, same rationale as `useEventStream` (FE-09): this is a
+ * POST body, not something native `EventSource` can send at all.
+ */
+export async function sendChatMessage(
+  sessionId: string,
+  content: string,
+  onEvent: (event: ChatStreamEvent) => void
+): Promise<void> {
+  const session = getSession();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (session) headers.Authorization = `Bearer ${session.accessToken}`;
+
+  const response = await fetch(`${API_URL}/api/v1/chat/sessions/${sessionId}/messages`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ content }),
+  });
+  if (!response.ok || !response.body) {
+    await throwApiError(response);
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const event = parseChatSseChunk(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+      if (event) onEvent(event);
+    }
+  }
+}

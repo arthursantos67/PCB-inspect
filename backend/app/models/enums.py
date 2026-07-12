@@ -80,6 +80,11 @@ class AnalysisReviewStatus(enum.StrEnum):
     REJECTED = "REJECTED"
 
 
+class ChatRole(enum.StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
 _SEVERITY_RANK: dict[Severity, int] = {
     Severity.LOW: 0,
     Severity.MEDIUM: 1,
