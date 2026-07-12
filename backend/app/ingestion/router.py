@@ -1,24 +1,14 @@
-import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analyses.schemas import AnalysisOut
 from app.auth.dependencies import get_current_user
 from app.core.config import Settings, get_settings
-from app.core.errors import ApiError
 from app.db.session import get_db
 from app.ingestion import service
-from app.ingestion.schemas import (
-    ImportSummary,
-    IngestionStatus,
-    InspectionProgress,
-    ScanRequest,
-    ScanSummary,
-)
-from app.models import Analysis, InspectionImage, User
+from app.ingestion.schemas import ImportSummary, IngestionStatus, ScanRequest, ScanSummary
+from app.models import User
 from app.models.enums import ImageSource
 
 router = APIRouter(prefix="/api/v1/inspections", tags=["ingestion"])
@@ -55,23 +45,3 @@ async def ingestion_status(
     db: AsyncSession = Depends(get_db), _current_user: User = Depends(get_current_user)
 ) -> IngestionStatus:
     return await service.get_ingestion_status(db)
-
-
-@router.get("/{inspection_id}", response_model=InspectionProgress)
-async def get_progress(
-    inspection_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
-) -> InspectionProgress:
-    image = await db.get(InspectionImage, inspection_id)
-    if image is None:
-        raise ApiError("INSPECTION_NOT_FOUND", "Inspection image not found.", 404)
-    analysis = await db.scalar(select(Analysis).where(Analysis.image_id == inspection_id))
-    return InspectionProgress(
-        id=image.id,
-        status=image.status,
-        failure_reason=image.failure_reason,
-        created_at=image.created_at,
-        processed_at=image.processed_at,
-        analysis=AnalysisOut.model_validate(analysis) if analysis is not None else None,
-    )

@@ -80,6 +80,129 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run build
 
+  e2e:
+    name: Frontend E2E (Playwright)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pcb_inspect
+          POSTGRES_PASSWORD: pcb_inspect
+          POSTGRES_DB: pcb_inspect
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pcb_inspect"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://pcb_inspect:pcb_inspect@localhost:5432/pcb_inspect
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/1
+      CELERY_RESULT_BACKEND: redis://localhost:6379/1
+      WATCH_ROOT: /tmp/pcb-e2e/watch-root
+      APP_DATA_DIR: /tmp/pcb-e2e/app-data
+      # No `weights/best.pt` (114MB, not tracked in git) and no GPU on CI runners — the
+      # inference worker runs the deterministic stub instead (backend/app/inference/model.py)
+      # so this suite can exercise ingestion -> processing -> detail view end to end (NFR-08).
+      INFERENCE_BACKEND: fake
+      SECRET_KEY: e2e-ci-secret-key-not-for-production-use
+      CORS_ALLOW_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+        working-directory: backend
+
+      - run: mkdir -p "$WATCH_ROOT" "$APP_DATA_DIR"
+
+      - name: Apply migrations and seed dev account
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          python -m app.db.seed
+
+      - name: Start API
+        working-directory: backend
+        run: nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/pcb-e2e-api.log 2>&1 &
+
+      - name: Start inference worker (fake backend)
+        working-directory: backend
+        env:
+          WORKER_ROLE: inference
+        run: |
+          nohup celery -A app.tasks.celery_app worker --pool=solo --queues=inference \
+            --loglevel=info > /tmp/pcb-e2e-worker.log 2>&1 &
+
+      - name: Wait for API health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8000/health | grep -q '"status":"ok"'; then
+              echo "API healthy"; exit 0
+            fi
+            sleep 1
+          done
+          echo "API did not become healthy in time"
+          cat /tmp/pcb-e2e-api.log
+          cat /tmp/pcb-e2e-worker.log
+          exit 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+      - name: Start frontend
+        working-directory: frontend
+        run: nohup npm run start -- -p 3000 > /tmp/pcb-e2e-frontend.log 2>&1 &
+
+      - name: Wait for frontend
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3000/login > /dev/null; then
+              echo "frontend up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "frontend did not start in time"
+          cat /tmp/pcb-e2e-frontend.log
+          exit 1
+
+      - run: npx playwright test
+        working-directory: frontend
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
+
   compose-validate:
     name: Validate docker-compose.yml
     runs-on: ubuntu-latest

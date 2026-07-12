@@ -34,7 +34,7 @@ function applyTokenResponse(body: TokenResponse): CurrentUser {
   return body.user;
 }
 
-async function throwApiError(response: Response): Promise<never> {
+export async function throwApiError(response: Response): Promise<never> {
   let code = "INTERNAL_SERVER_ERROR";
   let message = response.statusText || "Request failed";
   let details: Record<string, unknown> = {};
@@ -286,4 +286,69 @@ export async function listInspections(params: {
   if (params.page_size) search.set("page_size", String(params.page_size));
   if (params.ordering) search.set("ordering", params.ordering);
   return apiFetch(`/api/v1/inspections?${search.toString()}`);
+}
+
+// --- Inspection detail (FE-03, section 11.5) --------------------------------------------
+
+export type BBox = { x1: number; y1: number; x2: number; y2: number };
+
+export type Detection = {
+  id: string;
+  defect_type: DefectType;
+  bbox: BBox;
+  // Serialized as a string by Pydantic's Decimal encoding, not a JSON number.
+  confidence: string;
+  is_reported: boolean;
+  model_version: string;
+};
+
+export type InspectionBoardInfo = {
+  board_number: string | null;
+  batch_number: string | null;
+};
+
+export type PerDefectEntry = {
+  detection_id: string;
+  description: string;
+  probable_causes: string[];
+  suggested_solutions: string[];
+  severity: Severity;
+};
+
+export type AnalysisStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "NEEDS_HUMAN_REVIEW";
+export type AnalysisSource = "knowledge_base" | "agents";
+
+export type Analysis = {
+  id: string;
+  image_id: string;
+  status: AnalysisStatus;
+  source: AnalysisSource;
+  severity_max: Severity | null;
+  disposition_recommendation: "approve" | "rework" | "discard" | null;
+  executive_summary: string | null;
+  per_defect: PerDefectEntry[] | null;
+  review_status: "PENDING" | "VALIDATED" | "REJECTED";
+  created_at: string;
+};
+
+export type InspectionDetail = {
+  id: string;
+  status: ImageStatus;
+  board: InspectionBoardInfo;
+  failure_reason: string | null;
+  created_at: string;
+  processed_at: string | null;
+  duration_ms: number | null;
+  detections: Detection[];
+  analysis: Analysis | null;
+};
+
+export async function getInspection(id: string): Promise<InspectionDetail> {
+  return apiFetch(`/api/v1/inspections/${id}`);
+}
+
+export type ImageVariant = "original" | "annotated";
+
+export function inspectionImagePath(id: string, variant: ImageVariant): string {
+  return `/api/v1/inspections/${id}/image?variant=${variant}`;
 }

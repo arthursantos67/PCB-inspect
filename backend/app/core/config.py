@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +25,12 @@ class Settings(BaseSettings):
     # Storage — the watch root is read-only (section 3.5/14.1 of the PRD); app_data is writable
     watch_root: Path = Path("/data/watch-root")
     app_data_dir: Path = Path("/data/app-data")
+
+    # Inference backend (RV-01/RV-02). "fake" swaps the loaded model for a deterministic
+    # stub (app/inference/model.py) — used only by the Playwright E2E job (section 14.2),
+    # since `weights/best.pt` (114MB, README) isn't tracked in git and CI runners have no
+    # GPU. Never set outside that job; the default drives every real deployment.
+    inference_backend: Literal["ultralytics", "fake"] = "ultralytics"
 
     # LLM (section 5.2 — local-first by default)
     llm_provider: str = "openai_compatible"

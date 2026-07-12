@@ -76,6 +76,12 @@ async def process_image(
         if detection.is_reported:
             reportable.append(detection)
 
+    if stored:
+        # `Detection.id` is a Python-side default (uuid.uuid4) applied at INSERT time, not
+        # before — the caller (baseline analysis, Issue 7) stamps `detection_id` from these
+        # same objects, so it must see real ids, not `None`, ahead of the eventual commit.
+        await db.flush()
+
     if reportable_raw:
         annotated_path = write_annotated_image(
             source_path=Path(image.original_path),
