@@ -34,10 +34,10 @@ test("ingests a board, processes it, and renders the completed analysis", async 
   await expect(page).toHaveURL("/");
   await assertNoA11yViolations(page, "Dashboard");
 
-  // --- Trigger a one-off directory scan of the fixture batch (FR-03, FE-05, UC-2) ---
-  await page.getByRole("link", { name: "Ingestion" }).click();
-  await expect(page).toHaveURL("/ingestion");
-  await assertNoA11yViolations(page, "Ingestion");
+  // --- Trigger a one-off directory scan of the fixture batch (FR-03, FE-05/FE-08, UC-2) ---
+  await page.getByRole("link", { name: "Settings" }).click();
+  await expect(page).toHaveURL("/settings/ingestion");
+  await assertNoA11yViolations(page, "Settings > Ingestion");
   await page.getByLabel("Directory to scan").fill(watchDir);
   await page.getByRole("button", { name: "Scan directory now" }).click();
   await expect(page.getByText("Discovered 1 · Ingested 1 · Duplicate 0 · Failed 0 · Skipped 0")).toBeVisible();

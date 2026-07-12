@@ -40,10 +40,10 @@ test("completes the Phase-1 golden path using the keyboard alone", async ({ page
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "Skip to main content" })).toBeFocused();
 
-  // --- Dashboard -> Ingestion via the primary nav link (Enter activates a link like a click) ---
-  await page.getByRole("link", { name: "Ingestion" }).focus();
+  // --- Dashboard -> Settings via the primary nav link (Enter activates a link like a click) ---
+  await page.getByRole("link", { name: "Settings" }).focus();
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL("/ingestion");
+  await expect(page).toHaveURL("/settings/ingestion");
 
   // --- Scan the fixture directory using only the keyboard ---
   await page.getByLabel("Directory to scan").focus();
@@ -51,6 +51,12 @@ test("completes the Phase-1 golden path using the keyboard alone", async ({ page
   await page.getByRole("button", { name: "Scan directory now" }).focus();
   await page.keyboard.press("Enter");
   await expect(page.getByText("Discovered 1 · Ingested 1 · Duplicate 0 · Failed 0 · Skipped 0")).toBeVisible();
+
+  // --- Settings -> Ingestion monitor via the primary nav link (scoped to the "Primary" nav
+  // landmark — the Settings sub-nav also has an "Ingestion" tab at this point) ---
+  await page.getByLabel("Primary").getByRole("link", { name: "Ingestion" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL("/ingestion");
 
   // --- The ad hoc import dropzone must be reachable and operable via keyboard too (it opens
   // the native file picker on Enter/Space; opening that OS dialog isn't exercised here, but

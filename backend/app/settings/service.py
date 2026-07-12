@@ -1,10 +1,12 @@
 """Generic dynamic configuration store (FR-13), backed by `SystemConfig`.
 
-Only the ingestion-relevant keys (`watch_root_path`, `watch_mode_enabled`, `import_max_size_mb`)
-are meaningfully read/written today (issue 4); later issues add thresholds, LLM settings, etc.
-without needing to reshape this endpoint.
+Covers every value FR-13 requires at runtime: confidence thresholds, LLM connection, the
+agent analysis policy and its trigger criteria, quality alert thresholds, the watch root
+path/naming convention, retention, and the reports/exports output directory — see
+`config_schema.py` for the full key registry and per-key validation.
 """
 
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -15,15 +17,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit.service import record_audit
 from app.core.config import get_settings
 from app.core.crypto import decrypt_secret, encrypt_secret
+from app.core.errors import ApiError
 from app.models import SystemConfig
+from app.settings.config_schema import validate_config_value
 
 # Keys that must pass the invalid-path guard (PATH_NOT_FOUND/PATH_NOT_READABLE) before being
 # persisted — see FE-05 (no native folder picker, so the backend is the source of truth).
 _PATH_KEYS = {"watch_root_path"}
 
+# Keys that are app-owned output directories, not camera-written input — created on demand
+# rather than required to pre-exist (unlike `_PATH_KEYS`).
+_WRITABLE_DIR_KEYS = {"reports_output_dir"}
+
 # Keys stored encrypted (FR-13, `SystemConfig.is_secret`) — cloud LLM API keys, never returned
 # in cleartext by GET /api/v1/settings/config.
 _SECRET_KEYS = {"llm.api_key"}
+
+
+def _ensure_writable_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if not os.access(path, os.W_OK):
+        raise ApiError("PATH_NOT_WRITABLE", f"Path is not writable: {path}", 422)
 
 
 def _encrypt_for_storage(value: Any) -> dict[str, str | None]:
@@ -77,9 +91,15 @@ async def update_config(
 ) -> dict[str, Any]:
     from app.ingestion.service import validate_directory_path  # avoids a service import cycle
 
-    for key, value in updates.items():
+    # Validate every key up front — a batch with one bad key rejects atomically rather than
+    # partially applying (nothing below this point does I/O until the loop that follows).
+    normalized = {key: validate_config_value(key, value) for key, value in updates.items()}
+
+    for key, value in normalized.items():
         if key in _PATH_KEYS and value:
             await validate_directory_path(Path(str(value)))
+        if key in _WRITABLE_DIR_KEYS and value:
+            _ensure_writable_dir(Path(str(value)))
 
         is_secret = key in _SECRET_KEYS
         stored_value = _encrypt_for_storage(value) if is_secret else value

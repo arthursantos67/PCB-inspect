@@ -14,7 +14,7 @@ const NAV_ITEMS = [
   { label: "Ingestion", href: "/ingestion" },
   { label: "Chat", href: "/chat" },
   { label: "Reports", href: "/reports" },
-  { label: "Settings", href: "/settings/accounts" },
+  { label: "Settings", href: "/settings/ingestion" },
 ] as const;
 
 const STATUS_LABEL: Record<EventStreamStatus, string> = {
@@ -41,7 +41,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <span className="mb-6 px-2 text-lg font-semibold">PCB-Inspect</span>
         <nav aria-label="Primary" className="flex flex-col gap-1">
           {NAV_ITEMS.map((item) => {
-            const isActive = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+            const isActive =
+              item.href === "/"
+                ? pathname === "/"
+                : item.label === "Settings"
+                  ? pathname.startsWith("/settings")
+                  : pathname.startsWith(item.href);
             return (
               <Link
                 key={item.href}

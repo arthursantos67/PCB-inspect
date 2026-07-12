@@ -1,8 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { PathField } from "@/components/ingestion/PathField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,12 +10,10 @@ import {
   ApiError,
   getIngestionStatus,
   importFiles,
-  scanDirectory,
   updateConfig,
   type FileResult,
   type ImportSummary,
   type IngestionStatus,
-  type ScanSummary,
 } from "@/lib/api-client";
 
 const STATUS_LABEL: Record<IngestionStatus["status"], string> = {
@@ -54,10 +52,6 @@ export default function IngestionPage() {
   const [status, setStatus] = useState<IngestionStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
-  const [watchRootPath, setWatchRootPath] = useState("");
-  const [scanPath, setScanPath] = useState("");
-  const [scanResult, setScanResult] = useState<ScanSummary | null>(null);
-
   const [importResult, setImportResult] = useState<ImportSummary | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
@@ -68,8 +62,6 @@ export default function IngestionPage() {
       const next = await getIngestionStatus();
       setStatus(next);
       setStatusError(null);
-      // Only seed the field from the server once — don't clobber an in-progress edit.
-      setWatchRootPath((current) => current || (next.watch_root_path ?? ""));
     } catch (err) {
       setStatusError(err instanceof ApiError ? err.message : "Failed to load ingestion status.");
     }
@@ -81,21 +73,9 @@ export default function IngestionPage() {
     return () => clearInterval(interval);
   }, [refreshStatus]);
 
-  async function handleSaveWatchRoot(path: string) {
-    await updateConfig({ watch_root_path: path });
-    await refreshStatus();
-  }
-
   async function handleToggleWatchMode() {
     if (!status) return;
     await updateConfig({ watch_mode_enabled: !status.watch_mode_enabled });
-    await refreshStatus();
-  }
-
-  async function handleScan(path: string) {
-    setScanResult(null);
-    const summary = await scanDirectory(path);
-    setScanResult(summary);
     await refreshStatus();
   }
 
@@ -117,7 +97,12 @@ export default function IngestionPage() {
       <div>
         <h1 className="text-lg font-semibold">Ingestion</h1>
         <p className="text-sm text-muted-foreground">
-          Configure directory watching and run one-off scans or ad hoc imports.
+          Live watch-mode status and ad hoc imports. Watch root path, naming convention, and
+          one-off scans are configured under{" "}
+          <Link href="/settings/ingestion" className="underline underline-offset-2">
+            Settings &rsaquo; Ingestion
+          </Link>
+          .
         </p>
       </div>
 
@@ -157,53 +142,6 @@ export default function IngestionPage() {
                 </Button>
               )}
             </>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Watch root</CardTitle>
-          <CardDescription>
-            Absolute path to the directory the camera writes into. Each subdirectory is a batch;
-            each image inside it is a board.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <PathField
-            id="watch-root-path"
-            label="Watch root path"
-            value={watchRootPath}
-            onChange={setWatchRootPath}
-            onSubmit={handleSaveWatchRoot}
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Scan a directory now</CardTitle>
-          <CardDescription>
-            One-off scan of an arbitrary local path, without enabling continuous watching.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <PathField
-            id="scan-path"
-            label="Directory to scan"
-            value={scanPath}
-            onChange={setScanPath}
-            onSubmit={handleScan}
-            submitLabel="Scan directory now"
-          />
-          {scanResult && (
-            <div className="rounded-lg border p-3 text-sm">
-              <p>
-                Discovered {scanResult.discovered} · Ingested {scanResult.ingested} · Duplicate{" "}
-                {scanResult.duplicate} · Failed {scanResult.failed} · Skipped {scanResult.skipped}
-              </p>
-              <FileResultList files={scanResult.files} />
-            </div>
           )}
         </CardContent>
       </Card>
