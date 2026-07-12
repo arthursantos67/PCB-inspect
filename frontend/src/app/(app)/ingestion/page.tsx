@@ -114,6 +114,13 @@ export default function IngestionPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <div>
+        <h1 className="text-lg font-semibold">Ingestion</h1>
+        <p className="text-sm text-muted-foreground">
+          Configure directory watching and run one-off scans or ad hoc imports.
+        </p>
+      </div>
+
       <Card>
         <CardHeader>
           <CardTitle>Watch-mode status</CardTitle>
@@ -210,10 +217,19 @@ export default function IngestionPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <div
-            className={`flex h-32 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-sm text-muted-foreground transition-colors ${
+            role="button"
+            tabIndex={0}
+            aria-label="Drop image files here, or activate to choose files"
+            className={`flex h-32 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-sm text-muted-foreground transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
               dragActive ? "border-primary bg-muted/50" : "border-border"
             }`}
             onClick={() => fileInputRef.current?.click()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
             onDragOver={(event) => {
               event.preventDefault();
               setDragActive(true);

@@ -68,6 +68,7 @@ function LoginForm() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
+      <h1 className="sr-only">PCB-Inspect</h1>
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>{setupRequired ? "Set up PCB-Inspect" : "Sign in"}</CardTitle>

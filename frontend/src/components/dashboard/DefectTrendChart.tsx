@@ -82,7 +82,12 @@ export function DefectTrendChart({
         <PeriodSelector value={period} onChange={onPeriodChange} />
       </CardHeader>
       <CardContent>
-        <div className="h-72" aria-busy={isLoading}>
+        <div
+          className="h-72"
+          aria-busy={isLoading}
+          role="img"
+          aria-label={`Line chart of reported defect counts over the last ${period}, broken down by defect class`}
+        >
           {rows.length === 0 ? (
             <p className="flex h-full items-center justify-center text-sm text-muted-foreground">
               {isError ? "Failed to load" : isLoading ? "Loading…" : "No data for this period yet"}
