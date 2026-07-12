@@ -13,6 +13,7 @@ from app.inference.service import process_image
 from app.inspections.state import transition
 from app.models import InspectionImage
 from app.models.enums import ImageStatus
+from app.stats.cache import invalidate_all as invalidate_stats_cache
 from app.tasks.base import PipelineTask
 from app.tasks.celery_app import celery_app
 from app.tasks.db import task_db_session
@@ -63,6 +64,11 @@ async def _run_inference_async(inspection_image_id: str) -> None:
         if reportable_detections:
             analysis = await create_baseline_analysis(db, image, reportable_detections)
         await db.commit()
+
+        # Every completed image changes the dashboard aggregates (FR-08) regardless of
+        # whether it found a defect — invalidate ahead of the TTL so the SSE-triggered
+        # refetch below doesn't serve a stale cached value (section 3.6).
+        await invalidate_stats_cache()
 
         # Published only after commit (FR-14): a listening client must never observe an
         # event for a row it can't yet read back.

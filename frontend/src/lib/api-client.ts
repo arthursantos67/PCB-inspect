@@ -1,4 +1,5 @@
 import { type CurrentUser, getSession, setSession } from "@/lib/auth-store";
+import type { DefectType, Severity } from "@/lib/chart-colors";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -198,4 +199,91 @@ export async function updateConfig(config: Record<string, unknown>): Promise<Con
     method: "PATCH",
     body: JSON.stringify({ config }),
   });
+}
+
+// --- Stats (FR-08, FE-02) ---------------------------------------------------------------
+
+export type StatsSummary = {
+  total_inspected: number;
+  total_with_defects: number;
+  quality_rate: number;
+  last_24h_count: number;
+};
+
+export type TrendPeriod = "7d" | "30d" | "90d";
+export type TrendGranularity = "day" | "week" | "month";
+
+export type TrendPoint = {
+  bucket: string;
+  total: number;
+  by_defect_type: Partial<Record<DefectType, number>>;
+};
+
+export type StatsTrends = {
+  period: TrendPeriod;
+  granularity: TrendGranularity;
+  points: TrendPoint[];
+};
+
+export type StatsByDefectType = {
+  total: number;
+  counts: { defect_type: DefectType; count: number }[];
+};
+
+export async function getStatsSummary(): Promise<StatsSummary> {
+  return apiFetch("/api/v1/stats/summary");
+}
+
+export async function getStatsTrends(
+  period: TrendPeriod,
+  granularity: TrendGranularity = "day"
+): Promise<StatsTrends> {
+  return apiFetch(`/api/v1/stats/trends?period=${period}&granularity=${granularity}`);
+}
+
+export async function getStatsByDefectType(): Promise<StatsByDefectType> {
+  return apiFetch("/api/v1/stats/by-defect-type");
+}
+
+// --- Inspections listing (FR-07) — used by the dashboard's recent-analyses table (FE-02) ---
+
+export type ImageStatus =
+  | "QUEUED"
+  | "PROCESSING"
+  | "DETECTED"
+  | "ANALYZING"
+  | "COMPLETED"
+  | "FAILED";
+
+export type InspectionListItem = {
+  id: string;
+  status: ImageStatus;
+  batch_number: string | null;
+  board_number: string | null;
+  defect_types: DefectType[];
+  severity_max: Severity | null;
+  review_status: "PENDING" | "VALIDATED" | "REJECTED" | null;
+  disposition_recommendation: "approve" | "rework" | "discard" | null;
+  failure_reason: string | null;
+  created_at: string;
+  processed_at: string | null;
+};
+
+export type PaginatedInspections = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: InspectionListItem[];
+};
+
+export async function listInspections(params: {
+  page?: number;
+  page_size?: number;
+  ordering?: string;
+}): Promise<PaginatedInspections> {
+  const search = new URLSearchParams();
+  if (params.page) search.set("page", String(params.page));
+  if (params.page_size) search.set("page_size", String(params.page_size));
+  if (params.ordering) search.set("ordering", params.ordering);
+  return apiFetch(`/api/v1/inspections?${search.toString()}`);
 }
