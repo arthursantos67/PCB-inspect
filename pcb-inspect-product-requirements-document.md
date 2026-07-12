@@ -4,12 +4,11 @@
 
 **Project:** pcb-inspect
 **Document type:** Product Requirements Document (PRD) — Local Software (Full-Stack)
-**Version:** 2.0
-**Last update:** 2026-07-10
-**Source documents:** SRS "AI-Agent-Powered PCB Defect Analysis System"; trained YOLO11x model (notebook `PCB_Defect_Model.ipynb`); PRD v1.1 (hosted multi-user platform design — superseded by this version)
+**Last updated:** 2026-07-11
+**Source documents:** SRS "AI-Agent-Powered PCB Defect Analysis System"; trained YOLO11x model (notebook `PCB_Defect_Model.ipynb`)
 **Training notebook (Colab):** https://colab.research.google.com/drive/1X3VHl6POiBMQ3npn3OxlvM2PviQIvmfm?usp=sharing
 
-**v2.0 — architecture pivot.** The project is re-scoped from a hosted, multi-role web platform to **local, on-premise software** run by a single operator on one machine (optionally two, purely for throughput). The realistic deployment is a camera on the production line saving each captured board to a local folder, grouped by batch — the software processes that folder directly. This removes: multi-role RBAC (single local account model, section 2.2), cloud object storage (images are referenced from local disk, never copied, section 3.1), and browser-upload-first ingestion (directory watching/scanning is now primary, FR-03). Every network service binds to `localhost` only. Full rationale in section 3.1. A prior version of this document (v1.1) designed the system as a multi-tenant hosted platform; that direction was reconsidered and does not apply to this version.
+PCB-Inspect is local, on-premise software run on the machine (or two, purely for throughput) physically responsible for an inspection station. A camera on the production line saves each captured board to a local folder, grouped by batch; the software processes that folder directly. Every network service binds to `localhost` only (section 3.1), and the interface is delivered as a native desktop application (section 3.8) so the operator never runs a command or types a browser address.
 
 ---
 
@@ -37,7 +36,7 @@
 
 ## 1. Purpose and Scope
 
-PCB-Inspect is local software for automated quality inspection of Printed Circuit Boards (PCBs), built to run on the machine (or two) physically responsible for an inspection station — not as a hosted service. A camera on the production line captures each board and saves it to local disk, grouped into batches; PCB-Inspect watches that directory, detects and classifies defects with a trained YOLO11x model, and runs each detection through a chain of AI agents that produces an interpreted technical analysis (description, probable causes, suggested solutions). Images, detections, and analyses are stored and searchable locally, and surfaced through a browser-based interface that runs entirely on the same machine: a dashboard, history, reports, and a natural-language chat.
+PCB-Inspect is local software for automated quality inspection of Printed Circuit Boards (PCBs), built to run on the machine (or two) physically responsible for an inspection station — not as a hosted service. A camera on the production line captures each board and saves it to local disk, grouped into batches; PCB-Inspect watches that directory, detects and classifies defects with a trained YOLO11x model, and runs each detection through a chain of AI agents that produces an interpreted technical analysis (description, probable causes, suggested solutions). Images, detections, and analyses are stored and searchable locally, and surfaced through a native desktop application that runs entirely on the same machine: a dashboard, history, reports, and a natural-language chat, opened with a single double-click and no command-line interaction (section 3.8).
 
 **Scope covered by this document:**
 
@@ -50,6 +49,7 @@ Backend:
 - Persistence of images (referenced by local path, never copied), detections, and analyses, searchable by batch, board, defect type, date, and status
 - Aggregated metrics and a production quality summary
 - Chat with an AI agent that accesses analyses via tool-calling and streams responses
+- Native launcher process that starts the backend stack and reports readiness (FR-20)
 - Analysis and detection validation/feedback
 - Report generation and export (CSV, XLSX, PDF) to local disk
 - Feedback dataset export in YOLO format (data flywheel) and quality alerts
@@ -63,6 +63,7 @@ Frontend:
 - Chat interface with the AI agent (streaming)
 - Settings area (thresholds, LLM provider, watch directory, local accounts, model versions)
 - Real-time dashboard updates via SSE — all served from `localhost`
+- Zero-command startup: the operator double-clicks a native application icon and lands on the dashboard, with no terminal, command, or manual browser navigation (FR-20, section 3.8)
 
 ---
 
@@ -104,13 +105,13 @@ The system runs on the machine (or two) physically responsible for the inspectio
 - **No cloud/object storage.** Copying images that already exist on local disk into an object store (S3/MinIO) before processing them would double the storage footprint and add I/O for no benefit. Images are referenced by their local path; nothing is duplicated except the small annotated overlays the pipeline itself generates.
 - **No multi-role access control.** The software runs on one or two machines under the responsibility of a single operator. A permission matrix designed for an organization with distinct Operator/Quality/Manager/Admin roles solves a problem this deployment does not have. A single local account — optionally a couple of named accounts for shift attribution, with **no** permission differences between them — is the honest fit (section 2.2).
 - **No internet exposure by default.** All services bind to `localhost` only; nothing on the machine is reachable from the network. PCB imagery and defect data can be commercially sensitive, and a system with no listening network service has meaningfully smaller attack surface than any client-server system, on-premise or not. The AI agent pipeline defaults to a local LLM (LM Studio/Ollama) for the same reason — a cloud provider remains available, but only as an explicit, informed opt-in (section 5.2), never the default.
-- **The UI is still browser-based — the browser just never leaves the machine.** Rich interaction (an annotated-image viewer, a live dashboard, a streaming chat) is naturally built with web technology, and there's no reason to give that up just because the deployment target is a single machine. The frontend is served locally and opened in the operator's own browser; it is never published to a network, so "uses a browser" does not imply "hosted service." Wrapping the same stack in a native desktop shell (e.g., Tauri) is a reasonable later step, noted as a future possibility (section 17), not a requirement now.
+- **The interface runs inside a native desktop application, not a bare browser tab.** Rich interaction (an annotated-image viewer, a live dashboard, a streaming chat) is naturally built with web technology, so the interface itself (Next.js) stays web-based — but it is delivered wrapped in a thin native launcher (section 3.8) that starts the backend automatically and opens directly into its own application window. The operator double-clicks an application icon and sees the dashboard; a terminal, a command, or a manually typed `localhost` address are never part of daily operation.
 - **A task queue is kept, but for a different reason.** Celery and Redis remain in the architecture — not to serve multiple concurrent users, but to keep the API responsive while GPU-bound YOLO inference and LLM calls run in the background, and to leave the door open to a second machine running additional workers if throughput ever requires it. That two-machine option is a possibility to leave room for, not a commitment this project makes.
 
 ### 3.2 Architectural Style
 
 - **Backend:** FastAPI (Python 3.12+), a local service bound to `127.0.0.1`, with dedicated inference and agent workers behind a queue
-- **Frontend:** Next.js (App Router), served locally and opened in the operator's browser at `http://localhost:<port>`
+- **Frontend:** Next.js (App Router), served locally and rendered inside the native launcher's application window (section 3.8) — never opened by the operator as a manually navigated browser tab
 
 **Rationale for FastAPI:** the trained model is Python/Ultralytics; keeping the API and inference in the same ecosystem removes serialization layers between services, native async support serves SSE/chat streaming, and OpenAPI documentation is auto-generated from Pydantic schemas.
 
@@ -166,6 +167,15 @@ A failure at any stage moves the record to status `FAILED` with the reason persi
 - Global exception handler on the backend with a consistent error envelope (section 11.4)
 - The frontend maps `error.code` to localized messages; raw backend messages are never shown to the user
 - Celery tasks use exponential retry for transient failures (LLM unavailable, disk I/O hiccup); maximum 3 attempts
+
+### 3.8 Native Launcher and Startup Orchestration
+
+Two distinct moments in the software's lifecycle are kept strictly separate:
+
+- **One-time technical setup** — installing the container runtime and the PCB-Inspect stack on the inspection-station machine (section 14.1). Performed once by a technical installer (IT staff or the deploying integrator); not part of the daily operator's workflow.
+- **Daily operation** — the operator double-clicks the PCB-Inspect application icon. A thin native launcher, packaged per OS, checks whether the backend services are running, starts them silently if not, waits for `/health` to report ready, and opens the interface in its own application window — no browser chrome, no address bar, no visible terminal.
+
+The launcher owns process lifecycle for the local stack (start, stop, status, and surfacing startup errors) but does not replace any backend component: PostgreSQL, Redis, and the Celery workers keep running exactly as described in section 3.3, via the same Docker Compose stack, supervised by the launcher instead of by a manually typed command. Requirement: FR-20.
 
 ---
 
@@ -361,6 +371,10 @@ This requirement closes the continuous-improvement loop: retraining stays extern
 
 The system shall monitor the defect rate per batch and per time window against configurable thresholds (FR-13). When a threshold is exceeded, the system persists an alert, emits the `alert.defect_rate` SSE event, and displays it as a dashboard banner until acknowledged by the operator. Acknowledgments are audited (FR-16).
 
+### FR-20 Native Launcher and Zero-Command Startup
+
+The system shall ship a native launcher application (section 3.8) that starts the backend stack if it is not already running, waits for it to report healthy, and opens the interface directly — without the operator ever typing a command, opening a terminal, or navigating a browser manually. The launcher displays a loading state while the backend starts and an actionable error state if startup fails (e.g., container runtime not installed or not running).
+
 ---
 
 ## 7. Functional Requirements — Frontend
@@ -394,7 +408,7 @@ Screen with combinable filters (defect type, batch, board, dates, status, severi
 
 ### FE-05 Ingestion Settings and Monitor
 
-Because the frontend runs as a regular page in the operator's browser, it cannot open a native OS folder picker on its own — a plain web page has no standing access to the local filesystem beyond what the user explicitly hands it. The watch root directory is therefore configured as a **path field** in Settings: the operator types or pastes an absolute path, and the backend — which does run on the same machine and does have filesystem access — validates that the path exists and is readable before accepting it. (If the app is later wrapped in a native shell, per section 17, a real folder-picker dialog becomes available as an enhancement; it is not the baseline here.)
+Because the interface runs inside the native launcher (section 3.8), the watch root directory is configured through a real OS folder-picker dialog — the operator browses to and selects the directory; nothing is typed. A manual **path field** remains available as a fallback for scripted or advanced setups; when used, the backend — which runs on the same machine and has filesystem access — validates that the path exists and is readable before accepting it.
 
 The ingestion screen shows live watch-mode status (watching / paused, files discovered), a "scan directory now" action for a one-off path, and a small drag-and-drop area for importing a handful of stray files that aren't already under the watch root (FR-03). Real-time processing status tracking (queue → detection → analysis → completed) as the files move through the pipeline.
 
@@ -529,7 +543,8 @@ Responsive interface (desktop and tablet), keyboard-navigable, with adequate con
 
 ### NFR-07 Usability
 
-- An operator without prior software experience shall be able to run the system after 2 h of basic training.
+- Daily operation requires no training and no command-line interaction: the operator double-clicks the application icon (FR-20) and is looking at the dashboard within seconds, with no terminal, command, or browser address bar ever part of the workflow.
+- Initial technical setup (installing the container runtime and the stack, section 14.1) is a one-time task performed by a technical installer, not the daily operator, and does not count against this requirement.
 - Actionable error messages; skeleton loaders during requests.
 
 ### NFR-08 Testability
@@ -976,7 +991,7 @@ All routes beyond `/login` require an authenticated local session; there is no p
 
 ### 12.2 Shared Components
 
-- **`AppShell`** — layout with a navigation sidebar, SSE connection indicator, and account menu.
+- **`AppShell`** — layout with a navigation sidebar, SSE connection indicator, and account menu, rendered inside the native launcher's application window (section 3.8).
 - **`StatCard`** — dashboard metric card with variation vs. the previous period.
 - **`DefectTrendChart`** — line chart by defect type with a period selector.
 - **`AnnotatedImageViewer`** — viewer with zoom/pan, an SVG bounding-box overlay synchronized with the detections list, an original/annotated toggle, and a class legend (color + text, FE-10). Images are fetched from the local-disk-serving endpoint (section 3.1) — no expiring-URL handling needed.
@@ -1019,6 +1034,7 @@ All routes beyond `/login` require an authenticated local session; there is no p
 - Model weights and the golden-set reference data are mounted from a local volume; the active version is resolved at worker startup.
 - The watch root is mounted **read-only** into the `api`/`worker-inference` containers (they only ever read from it, section 3.5); the app-data directory (annotated images, reports, exports, database volume) is a separate, writable local volume.
 - Logs to stdout (JSON); local log retention ≥ 90 days.
+- The native launcher (FR-20, section 3.8) is packaged per OS (Windows/Linux) as a standalone installable application; it shells out to the same Docker Compose stack rather than reimplementing it.
 
 ### 14.2 CI (GitHub Actions)
 
@@ -1041,7 +1057,7 @@ The system is delivered in three incremental phases; each phase ends with the sy
 
 | Phase | Name | Deliverables | Requirements covered | Completion criterion |
 |---|---|---|---|---|
-| 1 | Inspection Core (MVP) | Local auth (single account), directory-based ingestion (watch mode + one-off scan), YOLO detection pipeline with baseline analysis, dashboard, analysis detail with annotated viewer, search/history, status SSE, health and OpenAPI | FR-01, FR-02, FR-03, FR-04, FR-05, FR-06 (baseline), FR-07, FR-08, FR-14, FR-15; FE-01–FE-05, FE-09, FE-10 | An operator logs in, points the app at a folder of PCB images, and views detections + baseline analysis end-to-end, with no LLM configured |
+| 1 | Inspection Core (MVP) | Local auth (single account), directory-based ingestion (watch mode + one-off scan), YOLO detection pipeline with baseline analysis, dashboard, analysis detail with annotated viewer, search/history, status SSE, health and OpenAPI, native launcher for zero-command startup | FR-01, FR-02, FR-03, FR-04, FR-05, FR-06 (baseline), FR-07, FR-08, FR-14, FR-15, FR-20; FE-01–FE-05, FE-09, FE-10 | An operator double-clicks the application icon, points the app at a folder of PCB images, and views detections + baseline analysis end-to-end, with no LLM configured and no command typed |
 | 2 | Intelligence | Agent chain (Analyst → Reviewer → Summarizer), chat with tool-calling and streaming, analysis validation and per-detection feedback, manual annotation, LLM configuration (local-first) | FR-06 (agents), FR-09, FR-10, FR-13 (LLM/policy); FE-06, feedback actions in FE-03 | In-depth analysis generated in `conditional` and `on_demand` modes; chat answers with real data via tools, using a local LLM by default |
 | 3 | Mature Operation | Reports (CSV/XLSX/PDF), model versioning with golden set, quality alerts, dataset export, full audit, retention, complete settings area | FR-11, FR-12, FR-16, FR-17, FR-18, FR-19; FE-07, FE-08 | A new model version is registered, evaluated, and activated with no downtime; a feedback dataset is exported in YOLO format |
 
@@ -1070,6 +1086,7 @@ The system is delivered in three incremental phases; each phase ends with the sy
 | FR-17 | `app/tasks/retention.py` (Celery beat) |
 | FR-18 | `app/datasets/exporter.py` (YOLO format), `app/datasets/router.py` |
 | FR-19 | `app/alerts/service.py`, `app/alerts/router.py`, `app/tasks/alert_monitor.py` (Celery beat) |
+| FR-20 | `launcher/` (native shell + startup orchestration, wraps `docker compose up -d` + health-wait) |
 | FE-01 | `src/app/login/page.tsx`, `src/contexts/AuthContext.tsx` |
 | FE-02 | `src/app/page.tsx`, `src/components/dashboard/*` |
 | FE-03 | `src/app/inspections/[id]/page.tsx`, `src/components/viewer/AnnotatedImageViewer.tsx` |
@@ -1091,7 +1108,7 @@ Not covered in this project's scope:
 - **Multi-user role-based access control and permission administration.** Deliberately out of scope here — the author addresses that domain in a separate portfolio project; PCB-Inspect intentionally stays a single-account, full-access tool (section 2.2).
 - **Remote/internet access to a running instance.** The interface binds to `localhost` only by default; LAN exposure, if ever desired, is an explicit, unsupported opt-in for the operator (section 13).
 - **Native camera integration.** The camera's own software is responsible for capturing and saving images to disk; PCB-Inspect only consumes the resulting files.
-- **Native desktop packaging (Tauri/Electron).** The browser-based UI running locally is the baseline for this project; wrapping the same stack in a native shell — including a real OS folder picker for FE-05 — is a reasonable future enhancement, not a requirement now.
+- **Fully self-contained single-binary distribution.** The native launcher (FR-20) removes command-line interaction from daily operation, but the backend continues to run via Docker Compose (PostgreSQL, Redis, Celery workers, section 3.3). Embedding the database and broker into the launcher itself, or removing the container-runtime dependency entirely, is not covered by this document.
 - Model retraining/fine-tuning within the software (the training cycle stays external; the software only versions and activates weights)
 - Detecting defects outside the 6 trained classes
 - Multi-tenancy (multiple isolated inspection stations sharing one instance)
