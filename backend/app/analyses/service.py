@@ -18,25 +18,35 @@ from app.core.errors import ApiError
 from app.inspections.state import transition
 from app.knowledge.defects import DEFECT_KNOWLEDGE_BASE
 from app.models import Analysis, Detection, InspectionImage
-from app.models.enums import AnalysisSource, AnalysisStatus, ImageStatus, Severity
+from app.models.enums import AnalysisSource, AnalysisStatus, ImageStatus, Severity, severity_rank
 
-_SEVERITY_ORDER: dict[Severity, int] = {
-    Severity.LOW: 0,
-    Severity.MEDIUM: 1,
-    Severity.HIGH: 2,
-    Severity.CRITICAL: 3,
-}
+
+def compute_severity_max(detections: Sequence[Detection]) -> Severity:
+    """The highest knowledge-base severity among `detections` — shared by the baseline
+    analysis and the agent trigger policy's "baseline severity >= high" condition
+    (`app.agents.policy`), so both read the exact same in-memory lookup.
+    """
+    return max(
+        (DEFECT_KNOWLEDGE_BASE[d.defect_type].severity for d in detections),
+        key=severity_rank,
+    )
 
 
 async def create_baseline_analysis(
     db: AsyncSession,
     image: InspectionImage,
     reportable_detections: Sequence[Detection],
+    *,
+    transition_to: ImageStatus = ImageStatus.COMPLETED,
 ) -> Analysis:
-    """Creates the 1:1 `Analysis` (RN-03) for `image` from the static knowledge base and
-    transitions the image straight to `COMPLETED` — baseline-only skips `ANALYZING`
-    (FR-06/FR-04) since no agent chain runs here. `reportable_detections` must be non-empty
-    (the no-defect path, FR-05, never reaches `DETECTED` and so never calls this).
+    """Creates the 1:1 `Analysis` (RN-03) for `image` from the static knowledge base.
+    `reportable_detections` must be non-empty (the no-defect path, FR-05, never reaches
+    `DETECTED` and so never calls this).
+
+    `transition_to` defaults to `COMPLETED` — baseline-only skips `ANALYZING` (FR-06/FR-04)
+    since no agent chain runs. The pipeline (`app.tasks.pipeline`) passes `ANALYZING` instead
+    when the `agent_analysis_mode` policy (issue #31) decides the Analyst/Reviewer/Summarizer
+    chain should run next, so the image doesn't prematurely land on a terminal status.
     """
     per_defect = []
     for detection in reportable_detections:
@@ -51,20 +61,15 @@ async def create_baseline_analysis(
             }
         )
 
-    severity_max = max(
-        (DEFECT_KNOWLEDGE_BASE[d.defect_type].severity for d in reportable_detections),
-        key=lambda s: _SEVERITY_ORDER[s],
-    )
-
     analysis = Analysis(
         image_id=image.id,
         status=AnalysisStatus.COMPLETED,
         source=AnalysisSource.KNOWLEDGE_BASE,
         per_defect=per_defect,
-        severity_max=severity_max,
+        severity_max=compute_severity_max(reportable_detections),
     )
     db.add(analysis)
-    transition(image, ImageStatus.COMPLETED)
+    transition(image, transition_to)
     return analysis
 
 

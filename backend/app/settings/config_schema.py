@@ -106,6 +106,9 @@ _VALIDATORS: dict[str, Callable[[str, Any], Any]] = {
     "agent_analysis_min_defect_count": _positive_int,
     "agent_analysis_critical_classes": _defect_type_list,
     "agent_analysis_min_severity": lambda k, v: _enum(k, v, _SEVERITY_VALUES),
+    # Reviewer reject/revise loop bound (issue #31) — a misbehaving/looping model falls back
+    # to the baseline analysis once this many Analyst attempts have been reviewed.
+    "agent_analysis_max_review_attempts": _positive_int,
     # Quality alert thresholds (FR-19)
     "alert_defect_rate_threshold": lambda k, v: _range(k, v, 0, 1),
     "alert_window_minutes": _positive_int,
