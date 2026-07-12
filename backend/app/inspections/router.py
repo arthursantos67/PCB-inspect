@@ -1,9 +1,10 @@
+import asyncio
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import FileResponse
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,14 +15,17 @@ from app.core.errors import ApiError
 from app.db.session import get_db
 from app.inspections.filters import InspectionFilters, Ordering, apply_filters, order_by_clauses
 from app.inspections.schemas import (
+    AgentAnalysisRequested,
     DetectionOut,
     InspectionBoard,
     InspectionDetail,
     InspectionListItem,
     PaginatedInspections,
 )
+from app.inspections.state import InvalidTransitionError, transition
 from app.models import Analysis, Batch, Board, Detection, InspectionImage, ModelVersion, User
 from app.models.enums import DefectType, ImageStatus, Severity
+from app.tasks.pipeline import run_agent_analysis
 
 router = APIRouter(prefix="/api/v1/inspections", tags=["inspections"])
 
@@ -218,3 +222,45 @@ async def get_inspection_image(
         raise ApiError("RESOURCE_NOT_FOUND", "Image file not found on disk.", 404)
 
     return FileResponse(path)
+
+
+@router.post(
+    "/{inspection_id}/agent-analysis",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=AgentAnalysisRequested,
+)
+async def request_agent_analysis(
+    inspection_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+) -> AgentAnalysisRequested:
+    """Explicit trigger for the Analyst/Reviewer/Summarizer chain (FE-03, `on_demand` mode,
+    FR-06/issue #31) — usable any time a completed, baseline-only inspection exists,
+    independent of the current `agent_analysis_mode`: the policy governs *automatic*
+    triggering (Issue 31's Policy Honored criterion), this endpoint is always the explicit
+    override FE-03 needs regardless of which mode is configured.
+    """
+    image = await db.get(InspectionImage, inspection_id)
+    if image is None:
+        raise ApiError("INSPECTION_NOT_FOUND", "Inspection image not found.", 404)
+
+    analysis = await db.scalar(select(Analysis).where(Analysis.image_id == inspection_id))
+    if analysis is None:
+        raise ApiError(
+            "INSPECTION_NOT_READY", "No baseline analysis available for this inspection yet.", 409
+        )
+
+    try:
+        transition(image, ImageStatus.ANALYZING)
+    except InvalidTransitionError as exc:
+        raise ApiError(
+            "INSPECTION_NOT_READY",
+            "Inspection must be COMPLETED before requesting an in-depth agent analysis.",
+            409,
+        ) from exc
+
+    await db.commit()
+    # Offloaded to a thread so the blocking Redis call never stalls the event loop (mirrors
+    # app.ingestion.service's enqueue-after-commit pattern, section 3.5).
+    await asyncio.to_thread(run_agent_analysis.delay, str(image.id))
+    return AgentAnalysisRequested()

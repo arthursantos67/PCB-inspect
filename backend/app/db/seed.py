@@ -24,6 +24,7 @@ DEFAULT_SYSTEM_CONFIG: dict[str, object] = {
     "agent_analysis_min_defect_count": 3,
     "agent_analysis_critical_classes": ["short"],
     "agent_analysis_min_severity": "high",
+    "agent_analysis_max_review_attempts": 2,
     "alert_defect_rate_threshold": 0.15,
     "alert_window_minutes": 60,
     "watch_naming_convention": "subdirectory_batch_filename_board",

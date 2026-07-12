@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -64,6 +65,15 @@ class DetectionOut(BaseModel):
 class InspectionBoard(BaseModel):
     board_number: str | None
     batch_number: str | None
+
+
+class AgentAnalysisRequested(BaseModel):
+    """`POST /{inspection_id}/agent-analysis` (FE-03, `on_demand` mode, issue #31) response —
+    the chain runs asynchronously on the `agents` queue, mirroring every other
+    enqueue-and-202 endpoint in the API (section 11.1).
+    """
+
+    status: Literal["queued"] = "queued"
 
 
 class InspectionDetail(BaseModel):

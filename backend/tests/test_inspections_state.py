@@ -23,6 +23,7 @@ def _image(status: ImageStatus = ImageStatus.QUEUED) -> InspectionImage:
         (ImageStatus.DETECTED, ImageStatus.ANALYZING),
         (ImageStatus.DETECTED, ImageStatus.COMPLETED),
         (ImageStatus.ANALYZING, ImageStatus.COMPLETED),
+        (ImageStatus.COMPLETED, ImageStatus.ANALYZING),
         (ImageStatus.FAILED, ImageStatus.QUEUED),
     ],
 )

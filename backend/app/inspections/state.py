@@ -6,6 +6,11 @@ goes straight to `COMPLETED`. `FAILED` is reachable from any non-terminal stage 
 failure can happen at any point in the pipeline, section 3.5) and `FAILED -> QUEUED` is
 allowed so an operator can re-ingest once the cause is fixed (section 3.5), without ever
 touching the file on disk.
+
+`COMPLETED -> ANALYZING` is also allowed (issue #31): the `on_demand` agent-analysis endpoint
+(`POST /api/v1/inspections/{id}/agent-analysis`) re-opens an already-completed, baseline-only
+inspection to run the Analyst/Reviewer/Summarizer chain against it — the only way back into a
+non-terminal status from COMPLETED, and only for that one target.
 """
 
 from datetime import UTC, datetime
@@ -24,7 +29,7 @@ ALLOWED_TRANSITIONS: dict[ImageStatus, frozenset[ImageStatus]] = {
         {ImageStatus.ANALYZING, ImageStatus.COMPLETED, ImageStatus.FAILED}
     ),
     ImageStatus.ANALYZING: frozenset({ImageStatus.COMPLETED, ImageStatus.FAILED}),
-    ImageStatus.COMPLETED: frozenset(),
+    ImageStatus.COMPLETED: frozenset({ImageStatus.ANALYZING}),
     ImageStatus.FAILED: frozenset({ImageStatus.QUEUED}),
 }
 
@@ -50,8 +55,9 @@ def transition(
             raise ValueError("failure_reason is required when transitioning to FAILED")
         image.failure_reason = failure_reason
     else:
-        # Leaving FAILED behind (re-ingestion) clears the stale reason and timestamp —
-        # the only non-FAILED target reachable from a terminal status is QUEUED.
+        # Leaving a terminal status behind (re-ingestion from FAILED, or on-demand
+        # reprocessing from COMPLETED) clears the stale reason/timestamp — both look like
+        # "already finished" state that no longer applies once the image is back in flight.
         image.failure_reason = None
         image.processed_at = None
 

@@ -167,11 +167,15 @@ def test_run_inference_is_idempotent_on_redelivery(
     """Worker Restart Safety (acks_late): a task can be redelivered after already committing
     its terminal transition. Re-running it must not fail or reprocess the image — the guard
     is `image.status is not PROCESSING`, checked before detection ever runs again.
+
+    Uses `mouse_bite` rather than `short` deliberately: `short` is a default
+    `agent_analysis_critical_classes` entry (issue #31) and would route the image to
+    `ANALYZING` instead of straight to `COMPLETED`, which is beside the point of this test.
     """
     bbox = {"x1": 0.1, "y1": 0.1, "x2": 0.5, "y2": 0.5}
     _stub_inference(
         monkeypatch,
-        detections=[RawDetection(defect_type="short", confidence=0.9, bbox=bbox)],
+        detections=[RawDetection(defect_type="mouse_bite", confidence=0.9, bbox=bbox)],
     )
     _run(_seed_active_model_version())
     monkeypatch.setattr(

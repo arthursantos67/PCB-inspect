@@ -78,3 +78,20 @@ class AnalysisReviewStatus(enum.StrEnum):
     PENDING = "PENDING"
     VALIDATED = "VALIDATED"
     REJECTED = "REJECTED"
+
+
+_SEVERITY_RANK: dict[Severity, int] = {
+    Severity.LOW: 0,
+    Severity.MEDIUM: 1,
+    Severity.HIGH: 2,
+    Severity.CRITICAL: 3,
+}
+
+
+def severity_rank(severity: Severity) -> int:
+    """Total order over `Severity` (low < medium < high < critical) — shared by every place
+    that needs to compare or max() severities: baseline analysis (`app.analyses.service`),
+    the agent chain's conditional trigger policy (`app.agents.policy`), and the Summarizer's
+    output.
+    """
+    return _SEVERITY_RANK[severity]
