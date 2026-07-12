@@ -20,17 +20,19 @@ export function InspectionTable({
   items,
   isLoading,
   isError,
+  emptyMessage = "No inspections yet.",
 }: {
   items: InspectionListItem[];
   isLoading: boolean;
   isError?: boolean;
+  emptyMessage?: string;
 }) {
   const router = useRouter();
 
   if (!isLoading && items.length === 0) {
     return (
       <p className="py-8 text-center text-sm text-muted-foreground">
-        {isError ? "Failed to load inspections." : "No inspections yet."}
+        {isError ? "Failed to load inspections." : emptyMessage}
       </p>
     );
   }

@@ -280,11 +280,25 @@ export async function listInspections(params: {
   page?: number;
   page_size?: number;
   ordering?: string;
+  defect_type?: DefectType[];
+  batch_number?: string;
+  board_number?: string;
+  status?: ImageStatus;
+  severity?: Severity;
+  date_from?: string;
+  date_to?: string;
 }): Promise<PaginatedInspections> {
   const search = new URLSearchParams();
   if (params.page) search.set("page", String(params.page));
   if (params.page_size) search.set("page_size", String(params.page_size));
   if (params.ordering) search.set("ordering", params.ordering);
+  for (const defectType of params.defect_type ?? []) search.append("defect_type", defectType);
+  if (params.batch_number) search.set("batch_number", params.batch_number);
+  if (params.board_number) search.set("board_number", params.board_number);
+  if (params.status) search.set("status", params.status);
+  if (params.severity) search.set("severity", params.severity);
+  if (params.date_from) search.set("date_from", params.date_from);
+  if (params.date_to) search.set("date_to", params.date_to);
   return apiFetch(`/api/v1/inspections?${search.toString()}`);
 }
 

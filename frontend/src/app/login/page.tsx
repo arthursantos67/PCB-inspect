@@ -14,7 +14,14 @@ function LoginForm() {
   const { login, setup, isAuthenticated } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const nextPath = searchParams.get("next") || "/";
+  const requestedNext = searchParams.get("next");
+  // Only ever redirect to a same-origin app path — a bare "/"-prefixed string, never
+  // "//host/..." (protocol-relative) or an absolute URL, which `next` being attacker-suppliable
+  // via a direct /login?next=... link would otherwise turn into an open redirect.
+  const nextPath =
+    requestedNext && requestedNext.startsWith("/") && !requestedNext.startsWith("//")
+      ? requestedNext
+      : "/";
 
   const [setupRequired, setSetupRequired] = useState<boolean | null>(null);
   const [email, setEmail] = useState("");
