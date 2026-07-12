@@ -52,8 +52,9 @@ test("completes the Phase-1 golden path using the keyboard alone", async ({ page
   await page.keyboard.press("Enter");
   await expect(page.getByText("Discovered 1 · Ingested 1 · Duplicate 0 · Failed 0 · Skipped 0")).toBeVisible();
 
-  // --- Settings -> Ingestion monitor via the primary nav link ---
-  await page.getByRole("link", { name: "Ingestion" }).focus();
+  // --- Settings -> Ingestion monitor via the primary nav link (scoped to the "Primary" nav
+  // landmark — the Settings sub-nav also has an "Ingestion" tab at this point) ---
+  await page.getByLabel("Primary").getByRole("link", { name: "Ingestion" }).focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL("/ingestion");
 
