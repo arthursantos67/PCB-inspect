@@ -20,7 +20,7 @@ cp .env.example .env   # adjust WATCH_ROOT_HOST_PATH, POSTGRES_*, LLM_* as neede
 docker compose up
 ```
 
-This brings up seven services: `api` (FastAPI, `127.0.0.1:8000`), `frontend` (Next.js, `127.0.0.1:3000`), `worker-inference` and `worker-agents` (Celery workers), `beat` (Celery periodic tasks), `db` (PostgreSQL 16, `127.0.0.1:5432`), and `redis` (`127.0.0.1:6379`).
+This brings up eight services: `api` (FastAPI, `127.0.0.1:8000`), `frontend` (Next.js, `127.0.0.1:3000`), `worker-inference`, `worker-agents`, and `worker-housekeeping` (Celery workers — housekeeping covers watch-mode ingestion, alerting, and retention, kept independent from the LLM-dependent agents worker), `beat` (Celery periodic tasks), `db` (PostgreSQL 16, `127.0.0.1:5432`), and `redis` (`127.0.0.1:6379`).
 
 Once running:
 - `http://localhost:3000` — dashboard placeholder

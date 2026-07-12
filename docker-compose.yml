@@ -44,6 +44,16 @@ services:
       PYTHONUNBUFFERED: "1"
       WORKER_ROLE: agents
 
+  worker-housekeeping:
+    <<: *backend-image
+    # Ingestion polling (FR-03), alert monitoring (FR-19), and retention (FR-17) — kept off
+    # the agents/LLM-dependent worker (`--queues=agents`) so a dead worker-agents/broken LLM
+    # connection can't also take down watch-mode ingestion, alerting, and retention.
+    command: celery -A app.tasks.celery_app worker --pool=solo --queues=housekeeping --loglevel=info
+    environment:
+      PYTHONUNBUFFERED: "1"
+      WORKER_ROLE: housekeeping
+
   beat:
     <<: *backend-image
     command: celery -A app.tasks.celery_app beat --loglevel=info

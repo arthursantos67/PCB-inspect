@@ -25,10 +25,16 @@ celery_app.conf.update(
     task_queues={
         "inference": {"exchange": "inference", "routing_key": "inference"},
         "agents": {"exchange": "agents", "routing_key": "agents"},
+        # Housekeeping (ingestion polling, alerting, retention) must survive a dead/misconfigured
+        # agents worker or LLM connection — routed off "agents" so it never shares fate with it.
+        "housekeeping": {"exchange": "housekeeping", "routing_key": "housekeeping"},
     },
     task_routes={
         "app.tasks.pipeline.run_inference": {"queue": "inference"},
         "app.tasks.pipeline.run_agent_analysis": {"queue": "agents"},
+        "app.tasks.ingestion.poll_watch_root": {"queue": "housekeeping"},
+        "app.tasks.alert_monitor.evaluate_thresholds": {"queue": "housekeeping"},
+        "app.tasks.retention.purge_expired": {"queue": "housekeeping"},
     },
     beat_schedule={
         "retention-purge": {

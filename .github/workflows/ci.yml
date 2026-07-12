@@ -227,3 +227,17 @@ jobs:
         with:
           context: ${{ matrix.image }}
           push: false
+          load: ${{ matrix.image == 'backend' }}
+          tags: pcb-inspect-${{ matrix.image }}:ci
+
+      # Regression guard (issue #21): the `e2e` job above always runs with
+      # INFERENCE_BACKEND=fake, which never imports ultralytics/cv2 and so never caught the
+      # real worker-inference boot crash (missing system graphics libs for opencv-python in
+      # python:3.12-slim). This imports the real (non-fake) inference backend inside the
+      # actual built image — no model weights or GPU needed, since the crash happens at
+      # `import cv2` time, before any weights are ever touched.
+      - name: Smoke test real inference import (no INFERENCE_BACKEND=fake)
+        if: matrix.image == 'backend'
+        run: |
+          docker run --rm pcb-inspect-backend:ci \
+            python -c "from app.inference.model import _yolo_class; _yolo_class()"
