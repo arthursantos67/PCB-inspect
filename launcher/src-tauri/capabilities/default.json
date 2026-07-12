@@ -5,8 +5,8 @@
   "permissions": [
     "core:default",
     "core:event:default",
-    "get_launcher_config",
-    "retry_startup",
-    "stop_stack_command"
+    "get-launcher-config",
+    "retry-startup",
+    "stop-stack-command"
   ]
 }
