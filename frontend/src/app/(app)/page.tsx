@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 
 import { DefectDistributionChart } from "@/components/dashboard/DefectDistributionChart";
@@ -91,8 +92,11 @@ export default function DashboardPage() {
       />
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Recent analyses</CardTitle>
+          <Link href="/inspections" className="text-sm text-primary hover:underline">
+            View all
+          </Link>
         </CardHeader>
         <CardContent>
           <InspectionTable

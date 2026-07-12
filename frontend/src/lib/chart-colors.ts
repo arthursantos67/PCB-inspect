@@ -40,6 +40,8 @@ export const DEFECT_TYPE_COLOR: Record<DefectType, string> = {
 
 export type Severity = "low" | "medium" | "high" | "critical";
 
+export const SEVERITIES: readonly Severity[] = ["low", "medium", "high", "critical"];
+
 export const SEVERITY_LABEL: Record<Severity, string> = {
   low: "Low",
   medium: "Medium",

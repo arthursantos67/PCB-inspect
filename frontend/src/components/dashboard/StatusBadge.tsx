@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import type { ImageStatus } from "@/lib/api-client";
 
-const STATUS_LABEL: Record<ImageStatus, string> = {
+export const STATUS_LABEL: Record<ImageStatus, string> = {
   QUEUED: "Queued",
   PROCESSING: "Processing",
   DETECTED: "Detected",
@@ -9,6 +9,16 @@ const STATUS_LABEL: Record<ImageStatus, string> = {
   COMPLETED: "Completed",
   FAILED: "Failed",
 };
+
+// Fixed enumeration order for status filter dropdowns (FE-04).
+export const IMAGE_STATUSES: readonly ImageStatus[] = [
+  "QUEUED",
+  "PROCESSING",
+  "DETECTED",
+  "ANALYZING",
+  "COMPLETED",
+  "FAILED",
+];
 
 const STATUS_VARIANT: Record<ImageStatus, "default" | "secondary" | "destructive" | "outline"> = {
   QUEUED: "outline",
