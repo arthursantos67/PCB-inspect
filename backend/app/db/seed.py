@@ -21,6 +21,13 @@ DEFAULT_SYSTEM_CONFIG: dict[str, object] = {
     "min_confidence_store": 0.25,
     "min_confidence_report": 0.50,
     "agent_analysis_mode": "conditional",
+    "agent_analysis_min_defect_count": 3,
+    "agent_analysis_critical_classes": ["short"],
+    "agent_analysis_min_severity": "high",
+    "alert_defect_rate_threshold": 0.15,
+    "alert_window_minutes": 60,
+    "watch_naming_convention": "subdirectory_batch_filename_board",
+    "retention_days": 730,
 }
 
 
@@ -46,6 +53,7 @@ async def seed() -> None:
             "llm.timeout_s": settings.llm_timeout_s,
             "watch_root_path": str(settings.watch_root),
             "watch_mode_enabled": True,
+            "reports_output_dir": str(settings.app_data_dir / "reports"),
         }
         for key, value in config_values.items():
             existing_config = await session.scalar(

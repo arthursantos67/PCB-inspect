@@ -33,8 +33,8 @@ test("filters the inspections list, combined and alone, with shareable URL state
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL("/");
 
-  await page.getByRole("link", { name: "Ingestion" }).click();
-  await expect(page).toHaveURL("/ingestion");
+  await page.getByRole("link", { name: "Settings" }).click();
+  await expect(page).toHaveURL("/settings/ingestion");
   await page.getByLabel("Directory to scan").fill(watchDir);
   await page.getByRole("button", { name: "Scan directory now" }).click();
   await expect(page.getByText("Discovered 2 · Ingested 2 · Duplicate 0 · Failed 0 · Skipped 0")).toBeVisible();

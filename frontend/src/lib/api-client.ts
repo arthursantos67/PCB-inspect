@@ -186,7 +186,7 @@ export async function importFiles(files: File[]): Promise<ImportSummary> {
   return apiFetch("/api/v1/inspections/import", { method: "POST", body: formData });
 }
 
-// --- Settings config (FR-13, scoped to ingestion keys for now) -------------------------
+// --- Settings config (FR-13) -------------------------------------------------------------
 
 export type ConfigResponse = { config: Record<string, unknown> };
 
@@ -199,6 +199,34 @@ export async function updateConfig(config: Record<string, unknown>): Promise<Con
     method: "PATCH",
     body: JSON.stringify({ config }),
   });
+}
+
+export type LlmProvider = "openai_compatible" | "anthropic" | "google";
+export type AgentAnalysisMode = "conditional" | "always" | "on_demand";
+
+export type SecretConfigValue = { configured: boolean; last4: string | null };
+
+// --- Health (FR-15) ----------------------------------------------------------------------
+
+export type HealthStatus = "ok" | "error" | "not_configured";
+
+export type HealthCheckResult = { status: HealthStatus; detail: string | null };
+
+export type HealthReport = {
+  status: "ok" | "degraded";
+  db: HealthCheckResult;
+  redis: HealthCheckResult;
+  worker: HealthCheckResult & {
+    model_loaded: boolean;
+    device: string | null;
+    model_version: string | null;
+  };
+  watch_root: HealthCheckResult;
+  llm: HealthCheckResult;
+};
+
+export async function getHealth(): Promise<HealthReport> {
+  return apiFetch("/health");
 }
 
 // --- Stats (FR-08, FE-02) ---------------------------------------------------------------
