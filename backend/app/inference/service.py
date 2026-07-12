@@ -85,7 +85,7 @@ async def process_image(
     if reportable_raw:
         annotated_path = write_annotated_image(
             source_path=Path(image.original_path),
-            detections=stored,
+            detections=reportable_raw,
             app_data_dir=app_data_dir,
             image_id=image.id,
         )

@@ -11,6 +11,7 @@ runners, so the real Ultralytics call is only exercised in local/manual verifica
 import uuid
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PIL import Image
@@ -18,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.inference.annotate import write_annotated_image
 from app.inference.detect import RawDetection, detect
 from app.inference.model import LoadedModel, ensure_model_loaded
 from app.inference.service import process_image
@@ -186,6 +188,39 @@ async def test_custom_thresholds_from_system_config_are_honored(
     assert len(detections) == 1
     assert detections[0].is_reported is False
     assert image.status == ImageStatus.COMPLETED
+
+
+async def test_annotated_image_only_draws_reportable_detections(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, board_image: Path
+) -> None:
+    """Regression (issue #21, item 7): a sub-`min_confidence_report` detection stored
+    alongside a reportable one must never reach `write_annotated_image` — the served
+    `variant=annotated` image must match exactly what `is_reported=True` exposes via the API,
+    not everything persisted for audit purposes (RV-03).
+    """
+    model_version = await _make_model_version(db_session)
+    image = await _make_image(db_session, str(board_image))
+    below_report = RawDetection(defect_type="spur", confidence=0.30, bbox=_bbox())
+    above_report = RawDetection(
+        defect_type="short", confidence=0.9, bbox=_bbox(0.5, 0.5, 0.7, 0.7)
+    )
+    monkeypatch.setattr(
+        "app.inference.service.detect", lambda *a, **k: [below_report, above_report]
+    )
+    captured: dict[str, object] = {}
+
+    def _capturing_write(*, detections: list[RawDetection], **kwargs: Any) -> Path:
+        captured["detections"] = detections
+        return write_annotated_image(detections=detections, **kwargs)
+
+    monkeypatch.setattr("app.inference.service.write_annotated_image", _capturing_write)
+
+    await process_image(
+        db_session, image, _loaded_model(model_version), app_data_dir=board_image.parent
+    )
+    await db_session.flush()
+
+    assert captured["detections"] == [above_report]
 
 
 async def test_multiple_detections_all_traced_to_active_model_version(

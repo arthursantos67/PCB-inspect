@@ -5,7 +5,6 @@ Local, on-premise software for automated PCB defect inspection. A trained YOLO11
 This is **not** a hosted web platform — it runs entirely on the machine(s) responsible for the inspection station, with every service bound to `localhost`. See section 3.1 of the PRD for the full rationale.
 
 Full requirements, architecture, and data model: [pcb-inspect-product-requirements-document.md](pcb-inspect-product-requirements-document.md).
-Phase 1 issue backlog (source for the GitHub issues): [issues-phase1.md](issues-phase1.md).
 
 ## Status
 
@@ -20,7 +19,7 @@ cp .env.example .env   # adjust WATCH_ROOT_HOST_PATH, POSTGRES_*, LLM_* as neede
 docker compose up
 ```
 
-This brings up seven services: `api` (FastAPI, `127.0.0.1:8000`), `frontend` (Next.js, `127.0.0.1:3000`), `worker-inference` and `worker-agents` (Celery workers), `beat` (Celery periodic tasks), `db` (PostgreSQL 16, `127.0.0.1:5432`), and `redis` (`127.0.0.1:6379`).
+This brings up eight services: `api` (FastAPI, `127.0.0.1:8000`), `frontend` (Next.js, `127.0.0.1:3000`), `worker-inference`, `worker-agents`, and `worker-housekeeping` (Celery workers — housekeeping covers watch-mode ingestion, alerting, and retention, kept independent from the LLM-dependent agents worker), `beat` (Celery periodic tasks), `db` (PostgreSQL 16, `127.0.0.1:5432`), and `redis` (`127.0.0.1:6379`).
 
 Once running:
 - `http://localhost:3000` — dashboard placeholder

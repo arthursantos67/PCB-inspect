@@ -12,6 +12,11 @@ from app.inference.status import get_model_status
 
 Status = Literal["ok", "error", "not_configured"]
 
+# Mirrors the `--queues` each worker service in docker-compose.yml consumes — if any of these
+# has no worker responding, ingestion/alerting/retention or agent analysis has silently
+# stopped even though at least one worker (e.g. inference) is still up.
+_EXPECTED_QUEUES = {"inference", "agents", "housekeeping"}
+
 
 class CheckResult(BaseModel):
     status: Status
@@ -62,29 +67,51 @@ async def check_redis(settings: Settings) -> CheckResult:
 
 
 async def check_worker(settings: Settings) -> WorkerCheckResult:
-    """Pings Celery workers, then enriches the result with the inference worker's warm-start
-    state (RV-01/RV-02) published to Redis by `app.inference.model.ensure_model_loaded`.
+    """Inspects which queues have a Celery worker actively consuming them, then enriches the
+    result with the inference worker's warm-start state (RV-01/RV-02) published to Redis by
+    `app.inference.model.ensure_model_loaded`.
+
+    A plain `control.ping()` only tells us *some* worker replied — with `worker-agents` dead
+    and only `worker-inference` up, that still returns a non-empty reply and would report
+    "ok" while ingestion/alerting/retention/agent analysis have all silently stopped. Checking
+    each expected queue's `active_queues()` membership instead catches that partial outage.
     """
     try:
         from app.tasks.celery_app import celery_app
 
-        replies = await asyncio.to_thread(celery_app.control.ping, timeout=1.0)
-        if not replies:
-            return WorkerCheckResult(status="error", detail="no worker responded")
+        active_queues = await asyncio.to_thread(
+            celery_app.control.inspect(timeout=1.0).active_queues
+        )
     except Exception as exc:  # noqa: BLE001
         return WorkerCheckResult(status="error", detail=str(exc))
 
+    if not active_queues:
+        return WorkerCheckResult(status="error", detail="no worker responded")
+
+    responding_queues = {
+        queue["name"] for queues in active_queues.values() for queue in (queues or [])
+    }
+    missing = _EXPECTED_QUEUES - responding_queues
+
     model_status = await get_model_status(settings)
-    if model_status is None:
+    model_loaded = False if model_status is None else model_status["model_loaded"]
+    device = None if model_status is None else model_status["device"]
+    model_version = None if model_status is None else model_status["model_version"]
+
+    if missing:
         return WorkerCheckResult(
-            status="ok", detail=f"{len(replies)} worker(s) responding", model_loaded=False
+            status="error",
+            detail=f"no worker consuming queue(s): {', '.join(sorted(missing))}",
+            model_loaded=model_loaded,
+            device=device,
+            model_version=model_version,
         )
     return WorkerCheckResult(
         status="ok",
-        detail=f"{len(replies)} worker(s) responding",
-        model_loaded=model_status["model_loaded"],
-        device=model_status["device"],
-        model_version=model_status["model_version"],
+        detail=f"{len(active_queues)} worker(s) responding, all queues covered",
+        model_loaded=model_loaded,
+        device=device,
+        model_version=model_version,
     )
 
 
