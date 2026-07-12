@@ -463,14 +463,178 @@ updates live via SSE (Issue 8) instead of a static "not found."
 
 ---
 
-## Not Yet Drafted (Phase 2 / Phase 3 / later Phase 1 candidates)
+## Issue 11 — [Bug] Fix worker-inference startup crash (missing system libraries for opencv-python)
 
-Matching the note left on the original backlog: the following remain candidates for future issues,
-not detailed here —
+### Summary
+`worker-inference` crashes at boot when loading the real model weights (`weights/best.pt`): `import
+cv2` (pulled in transitively by `ultralytics`) fails with `ImportError: libxcb.so.1: cannot open
+shared object file`, because the `python:3.12-slim` base image in `backend/Dockerfile` has none of
+the system graphics libraries `opencv-python` needs at import time, even headless. `/health` reports
+`model_loaded: false`, and every image scanned/imported with real weights gets stuck in
+`QUEUED`/`PROCESSING` forever. CI's e2e suite doesn't catch this because it runs with
+`INFERENCE_BACKEND=fake`, which never imports `ultralytics`. This blocks Issue 6's actual production
+behavior — detected during a manual smoke test of the full stack (see `known-issues.md`).
 
-- Search/history screen polish beyond the API (FE-04 as a dedicated frontend issue)
-- A full accessibility pass across all Phase-1 screens (FE-10 as a dedicated issue, vs. the
-  per-issue acceptance criteria above)
-- Everything under Phase 2 (agent chain, chat, feedback/annotation UI, LLM settings) and Phase 3
-  (reports, model versioning with golden set, quality alerts, dataset export, full settings area)
-  per PRD section 15 — to be drafted once Phase 1 is stable.
+### Scope
+
+**1. Fix the Root Cause**
+Swap `opencv-python` for `opencv-python-headless` in the backend's dependencies (preferred — no GUI
+bindings, no `libGL`/`libxcb` dependency, smaller image), or add the missing system libraries to
+`backend/Dockerfile` if a transitive dependency still requires them.
+
+**2. Regression Coverage**
+Add a CI check that exercises the real inference import/boot path (not `INFERENCE_BACKEND=fake`),
+so this class of failure can't silently reappear — at minimum, a smoke step that builds
+`worker-inference` and imports `app.inference.model` (or boots the container and polls `/health`)
+with real weights mounted.
+
+**3. Verify**
+Confirm `/health` reports `worker.model_loaded: true` and the correct device with real weights, and
+that a scanned image reaches `COMPLETED` through the real (non-fake) inference path.
+
+### Acceptance Criteria
+- [ ] **Clean Boot:** `worker-inference` starts with `weights/best.pt` mounted, no `ImportError`.
+- [ ] **Health Reflects Reality:** `/health` reports `model_loaded: true` and the active device.
+- [ ] **Real Pipeline Works:** a directory scan against a real image reaches `COMPLETED` using the
+      real model, not `INFERENCE_BACKEND=fake`.
+- [ ] **Regression Guard:** CI fails if this class of import/startup failure reappears.
+- [ ] **Docs:** the `known-issues.md` entry for this bug is removed or marked resolved.
+
+---
+
+## Issue 12 — [Feature] Native launcher and zero-command startup (FR-20)
+
+### Summary
+Per PRD section 3.8 / FR-20 — now part of Phase 1's own completion criterion (section 15) — the
+daily operator should never run a command or navigate a browser manually to use PCB-Inspect.
+Today, "running the system" means typing `docker compose up` in a terminal every single time, which
+is disqualifying for the target non-technical plant-administrator persona (NFR-07) and was never
+actually built despite being scoped as part of Phase 1.
+
+### Scope
+
+**1. Launcher Application**
+A thin native shell (e.g., Tauri), packaged per OS, that: checks whether the backend stack is
+running; starts it (`docker compose up -d`) if not; waits for `/health` to report ready; opens the
+interface in its own application window — no browser chrome, no address bar, no visible terminal.
+
+**2. Startup and Error States**
+A loading/splash state while the backend starts; a clear, actionable error state if the container
+runtime isn't installed or isn't running (rather than a silent hang).
+
+**3. Lifecycle**
+Stop/status actions exposed from the launcher; document the chosen behavior for what happens to the
+running stack when the launcher window is closed.
+
+**4. Packaging**
+A build artifact for at least one OS (Windows recommended — most likely production-line PC),
+documenting the one-time technical setup (section 14.1) as clearly separate from, and shorter than,
+daily double-click operation (NFR-07).
+
+### Acceptance Criteria
+- [ ] **Cold Start:** double-clicking the launcher icon with the stack stopped starts it and opens
+      the dashboard automatically, with no terminal involved.
+- [ ] **Warm Start:** double-clicking the launcher icon with the stack already running just opens
+      the dashboard — no duplicate containers.
+- [ ] **Error Visibility:** a missing/stopped container runtime produces a clear error state, not a
+      silent hang.
+- [ ] **No Browser Chrome:** the launcher window has no visible address bar.
+- [ ] **Setup vs. Operation Documented:** one-time technical setup steps are documented separately
+      from, and are clearly shorter than, the daily launch flow.
+- [ ] **Tests:** launcher start/detect-running/error-state behavior covered where practical (native
+      shells vary in testability — document what's covered vs. manually verified).
+
+---
+
+## Issue 13 — [Feature] Search and history screen (FE-04)
+
+### Summary
+`GET /api/v1/inspections` (FR-07) was built in Issue 8, and FE-04 is explicitly part of Phase 1's
+frontend scope (section 15), but no dedicated screen was ever built for it — there is no
+`/inspections` route today, only the dashboard's fixed "recent analyses" table (10 most recent) and
+the per-inspection detail page. Operators currently have no way to search or filter historical
+inspections at all.
+
+### Scope
+
+**1. `/inspections` Route**
+A dedicated page consuming the existing search API with its full filter set (defect type, batch,
+board, date range, status, severity — section 11.3).
+
+**2. `FilterBar` Component**
+Combinable filters persisted in the URL (shareable/bookmarkable), per section 12.2.
+
+**3. Results Display**
+Paginated table (reusing `InspectionTable`), consistent with the dashboard's styling; a clear
+empty-state message when no results match.
+
+**4. Navigation**
+A nav entry into this screen (e.g., "Inspections"), plus a "view all" link from the dashboard's
+recent-analyses table.
+
+Export of filtered results (CSV/XLSX/PDF) is FR-11 (Phase 3) — explicitly out of scope here; this
+issue only covers browsing, filtering, and opening a detail from search results.
+
+### Acceptance Criteria
+- [ ] **Route Renders:** `/inspections` shows a paginated, filterable list backed by the existing
+      search API.
+- [ ] **Filters Work:** each documented filter narrows results correctly, alone and combined.
+- [ ] **Shareable State:** filter state is reflected in the URL and restorable via direct link or
+      refresh.
+- [ ] **Detail Navigation:** selecting a row opens the existing analysis detail screen (Issue 10).
+- [ ] **Empty State:** no-results is handled with a clear message, not a blank table.
+- [ ] **Tests:** Playwright coverage for at least one filter combination, plus component tests for
+      `FilterBar`.
+
+---
+
+## Issue 14 — [Feature] Full accessibility pass across Phase-1 screens (FE-10)
+
+### Summary
+FE-10 (responsive, keyboard-navigable, adequate contrast, text labels for color indicators, ARIA
+roles) is part of Phase 1's own completion criterion, and each prior issue's acceptance criteria
+included a narrow accessibility check scoped to its own screen — but no pass has verified the
+requirement holistically across the full Phase-1 surface (login, dashboard, ingestion, detail, and
+now search/history from Issue 13). This was explicitly flagged as an undrafted candidate on the
+original backlog.
+
+### Scope
+
+**1. Keyboard Navigation Audit**
+Every interactive element (nav, filters, table rows, image viewer zoom/pan/toggle, bbox selection)
+reachable and operable via keyboard alone, across all Phase-1 screens.
+
+**2. Color Contrast Audit**
+Text/background contrast ratios meet WCAG AA, particularly for defect-class and severity badges.
+
+**3. Text Labels for Color-Coded Indicators**
+Confirm every defect-class/severity color also carries a text label, not color alone — already
+partially done per-component; verify comprehensively.
+
+**4. ARIA Roles**
+Verify roles/labels on custom interactive components (`AnnotatedImageViewer` bbox overlay,
+`ProcessingStatusStepper`, `FilterBar`, tables) with a screen-reader spot check.
+
+**5. Responsive Check**
+Desktop and tablet breakpoints render usably (no clipped/overlapping content) on all Phase-1
+screens.
+
+### Acceptance Criteria
+- [ ] **Keyboard-Only Golden Path:** login → ingest → dashboard → search/filter → detail completes
+      with no dead ends, keyboard only.
+- [ ] **Contrast Check:** an automated check (e.g., axe/Lighthouse) passes with no critical
+      violations on all Phase-1 screens.
+- [ ] **Text Labels:** every color-coded UI element (defect class, severity, status) has an
+      accompanying text label.
+- [ ] **ARIA Coverage:** roles present and correct on custom interactive components, verified with a
+      screen-reader spot check.
+- [ ] **Responsive:** desktop and tablet viewport widths render without clipped/overlapping content.
+- [ ] **Regression Guard:** findings/fixes documented; automated checks added to CI where practical.
+
+---
+
+## Not Yet Drafted (Phase 2 / Phase 3)
+
+Everything under Phase 2 (agent chain, chat, feedback/annotation UI, LLM settings) and Phase 3
+(reports, model versioning with golden set, quality alerts, dataset export, full settings area) per
+PRD section 15 — to be drafted once Phase 1 (issues 1–14) is stable.
