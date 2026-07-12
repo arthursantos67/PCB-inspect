@@ -5,7 +5,6 @@ Local, on-premise software for automated PCB defect inspection. A trained YOLO11
 This is **not** a hosted web platform — it runs entirely on the machine(s) responsible for the inspection station, with every service bound to `localhost`. See section 3.1 of the PRD for the full rationale.
 
 Full requirements, architecture, and data model: [pcb-inspect-product-requirements-document.md](pcb-inspect-product-requirements-document.md).
-Phase 1 issue backlog (source for the GitHub issues): [issues-phase1.md](issues-phase1.md).
 
 ## Status
 
