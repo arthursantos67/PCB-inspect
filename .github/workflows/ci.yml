@@ -211,6 +211,54 @@ jobs:
       - run: cp .env.example .env
       - run: docker compose config -q
 
+  launcher-core-test:
+    name: Launcher core lint & tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: launcher
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher -> target
+      - run: cargo fmt -p pcb-launcher-core -- --check
+      - run: cargo clippy -p pcb-launcher-core --all-targets -- -D warnings
+      - run: cargo test -p pcb-launcher-core
+
+  # Compiles the actual Tauri shell (FR-20) against the real tauri crate on the one platform
+  # GitHub-hosted runners can fully link without extra licensing/VM setup (Linux, via
+  # webkit2gtk). This is what catches Tauri v2 API-usage mistakes in launcher/src-tauri —
+  # `launcher-core-test` above only proves the GUI-independent orchestration logic works.
+  # Windows packaging (AC4) is a separate, manually-triggered job (see launcher-package-windows
+  # in this workflow) since a full release build + installer is too slow to run on every push.
+  launcher-build:
+    name: Launcher Tauri shell (compile check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: launcher
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher -> target
+      - run: cargo check -p pcb-inspect-launcher --all-targets
+
   docker-build:
     name: Docker image build (${{ matrix.image }})
     runs-on: ubuntu-latest

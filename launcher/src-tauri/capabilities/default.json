@@ -1,0 +1,12 @@
+{
+  "identifier": "default",
+  "description": "Permissions for the launcher's splash/error window: listen for startup-state events and invoke the app's own retry/stop commands. No filesystem, shell, or HTTP plugin access is granted — Docker and health-check calls happen on the Rust side only.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "get_launcher_config",
+    "retry_startup",
+    "stop_stack_command"
+  ]
+}

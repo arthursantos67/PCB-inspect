@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PCB-Inspect</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #0f1720; color: #e2f0fd;
+  }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    -webkit-user-select: none; user-select: none;
+  }
+  .panel { max-width: 480px; text-align: center; padding: 2rem; }
+  .spinner {
+    width: 48px; height: 48px; margin: 0 auto 1.5rem;
+    border: 4px solid #1c2f45; border-top-color: #38bdf8;
+    border-radius: 50%; animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.5rem; }
+  p.detail {
+    font-size: 0.85rem; color: #92a8c2; white-space: pre-wrap; word-break: break-word;
+    max-height: 8rem; overflow-y: auto; margin: 0.75rem 0 0;
+  }
+  .error-icon { font-size: 2.5rem; margin-bottom: 1rem; }
+  button {
+    margin-top: 1.5rem; padding: 0.5rem 1.25rem; font-size: 0.9rem;
+    background: #38bdf8; color: #0f1720; border: none; border-radius: 6px;
+    cursor: pointer; font-weight: 600;
+  }
+  button:hover { background: #7dd3fc; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div id="spinner" class="spinner"></div>
+    <div id="error-icon" class="error-icon hidden">&#9888;&#65039;</div>
+    <h1 id="title">Starting PCB-Inspect&hellip;</h1>
+    <p id="detail" class="detail hidden"></p>
+    <button id="retry" class="hidden">Retry</button>
+  </div>
+
+  <script>
+    // Splash/error UI for the native launcher (FR-20). On success the Rust side navigates
+    // this window directly to the running frontend (http://127.0.0.1:3000) — this page never
+    // has to do that itself, so it stays a plain static file with no build step.
+    const { event, core } = window.__TAURI__;
+
+    const titleEl = document.getElementById("title");
+    const detailEl = document.getElementById("detail");
+    const spinnerEl = document.getElementById("spinner");
+    const errorIconEl = document.getElementById("error-icon");
+    const retryEl = document.getElementById("retry");
+
+    const MESSAGES = {
+      checking_runtime: "Checking the container runtime…",
+      stack_already_running: "PCB-Inspect is already running — opening the dashboard…",
+      starting_stack: "Starting PCB-Inspect…",
+      waiting_for_health: "Waiting for the backend to become ready…",
+      ready: "Ready — opening the dashboard…",
+    };
+
+    function showBusy(message, detail) {
+      spinnerEl.classList.remove("hidden");
+      errorIconEl.classList.add("hidden");
+      retryEl.classList.add("hidden");
+      titleEl.textContent = message;
+      if (detail) {
+        detailEl.textContent = detail;
+        detailEl.classList.remove("hidden");
+      } else {
+        detailEl.classList.add("hidden");
+      }
+    }
+
+    function showError(message, detail) {
+      spinnerEl.classList.add("hidden");
+      errorIconEl.classList.remove("hidden");
+      retryEl.classList.remove("hidden");
+      titleEl.textContent = message;
+      detailEl.textContent = detail || "";
+      detailEl.classList.toggle("hidden", !detail);
+    }
+
+    const ERROR_TITLES = {
+      config_invalid: "Setup incomplete",
+      runtime_unavailable: "Container runtime not available",
+      startup_failed: "Could not start PCB-Inspect",
+      health_timed_out: "PCB-Inspect did not start in time",
+    };
+
+    event.listen("launcher://state", (evt) => {
+      const { kind, detail } = evt.payload;
+      if (kind in ERROR_TITLES) {
+        showError(ERROR_TITLES[kind], detail);
+      } else if (kind === "waiting_for_health") {
+        showBusy(MESSAGES.waiting_for_health, detail);
+      } else if (kind in MESSAGES) {
+        showBusy(MESSAGES[kind]);
+      }
+    });
+
+    retryEl.addEventListener("click", () => {
+      showBusy("Retrying…");
+      core.invoke("retry_startup");
+    });
+
+    showBusy(MESSAGES.checking_runtime);
+  </script>
+</body>
+</html>

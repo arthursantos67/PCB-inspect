@@ -19,6 +19,11 @@ cp .env.example .env   # adjust WATCH_ROOT_HOST_PATH, POSTGRES_*, LLM_* as neede
 docker compose up
 ```
 
+For the target production-line persona (NFR-07), this `docker compose up` step is a one-time
+technical setup detail, not something the daily operator ever types — see
+[launcher/README.md](launcher/README.md) for the native launcher (FR-20) that turns daily
+operation into a single double-click.
+
 This brings up eight services: `api` (FastAPI, `127.0.0.1:8000`), `frontend` (Next.js, `127.0.0.1:3000`), `worker-inference`, `worker-agents`, and `worker-housekeeping` (Celery workers — housekeeping covers watch-mode ingestion, alerting, and retention, kept independent from the LLM-dependent agents worker), `beat` (Celery periodic tasks), `db` (PostgreSQL 16, `127.0.0.1:5432`), and `redis` (`127.0.0.1:6379`).
 
 Once running:
