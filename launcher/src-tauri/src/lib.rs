@@ -71,14 +71,24 @@ impl From<&LauncherState> for StatePayload {
 /// directory (PRD section 14.1's one-time setup). `PCB_LAUNCHER_PROJECT_DIR` overrides this for
 /// development, so the launcher can be run from `launcher/src-tauri` against the repo root
 /// during manual testing without having to relocate the binary first.
+///
+/// Always returned as an absolute path: `LauncherConfig` stores it (and the `docker-compose.yml`
+/// / `.env` paths derived from it) for the lifetime of the app, but the `docker compose`
+/// invocation itself doesn't happen until a background thread runs later (`spawn_startup`),
+/// after GTK/webview/tray-icon setup — which on Linux can change the process's current working
+/// directory as a side effect. A relative path resolved lazily against a since-changed CWD
+/// would silently point at the wrong directory; canonicalizing here, before any of that
+/// happens, makes the config immune to it.
 fn resolve_project_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("PCB_LAUNCHER_PROJECT_DIR") {
-        return PathBuf::from(dir);
-    }
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
+    let dir = if let Ok(dir) = std::env::var("PCB_LAUNCHER_PROJECT_DIR") {
+        PathBuf::from(dir)
+    } else {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+    std::fs::canonicalize(&dir).unwrap_or(dir)
 }
 
 /// Runs the cold/warm-start flow on a background thread so the splash window's event loop
