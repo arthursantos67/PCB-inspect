@@ -19,6 +19,11 @@ node_modules/
 dist/
 build/
 
+# Rust / launcher
+launcher/target/
+launcher/**/target/
+launcher/src-tauri/gen/
+
 # Environment
 .env
 .env.*
