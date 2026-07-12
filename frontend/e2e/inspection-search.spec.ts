@@ -5,6 +5,8 @@ import path from "node:path";
 
 import { expect, test } from "@playwright/test";
 
+import { assertNoA11yViolations } from "./a11y";
+
 // FE-04: the dedicated search/history screen at /inspections, backed by the same search API
 // as Issue 8 (GET /api/v1/inspections). Ingests two boards in one scan so a board-number
 // filter has something real to narrow down, then exercises: filtering alone, filtering
@@ -40,6 +42,7 @@ test("filters the inspections list, combined and alone, with shareable URL state
   // --- Navigate to the search/history screen via the nav entry (not a raw goto) ---
   await page.getByRole("link", { name: "Inspections" }).click();
   await expect(page).toHaveURL("/inspections");
+  await assertNoA11yViolations(page, "Inspections search/history");
 
   const rowA = page.getByRole("row", { name: new RegExp(boardA) });
   const rowB = page.getByRole("row", { name: new RegExp(boardB) });

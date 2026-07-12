@@ -9,6 +9,7 @@ const MIN_SCALE = 1;
 const MAX_SCALE = 4;
 const SCALE_STEP = 0.5;
 const VIEWER_HEIGHT = 480;
+const PAN_STEP = 40;
 
 type Offset = { x: number; y: number };
 
@@ -75,6 +76,35 @@ export function AnnotatedImageViewer({
     dragging.current = null;
   }
 
+  // Keyboard equivalent of pointer-drag panning (FE-10) — only meaningful once zoomed in,
+  // since at MIN_SCALE the image is already fully visible and there's nothing to pan to.
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (scale <= MIN_SCALE) return;
+    const step = PAN_STEP;
+    switch (event.key) {
+      case "ArrowLeft":
+        event.preventDefault();
+        setOffset((o) => ({ ...o, x: o.x + step }));
+        break;
+      case "ArrowRight":
+        event.preventDefault();
+        setOffset((o) => ({ ...o, x: o.x - step }));
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        setOffset((o) => ({ ...o, y: o.y + step }));
+        break;
+      case "ArrowDown":
+        event.preventDefault();
+        setOffset((o) => ({ ...o, y: o.y - step }));
+        break;
+      case "Home":
+        event.preventDefault();
+        resetView();
+        break;
+    }
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -138,13 +168,17 @@ export function AnnotatedImageViewer({
       <div
         role="group"
         aria-roledescription="image viewer"
-        aria-label={`${variant === "annotated" ? "Annotated" : "Original"} PCB image, zoom and pan`}
-        className="relative overflow-hidden rounded-lg border border-border bg-muted/30"
+        aria-label={`${variant === "annotated" ? "Annotated" : "Original"} PCB image, zoom and pan${
+          scale > MIN_SCALE ? " — use arrow keys to pan, Home to reset" : ""
+        }`}
+        tabIndex={0}
+        className="relative overflow-hidden rounded-lg border border-border bg-muted/30 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         style={{ height: VIEWER_HEIGHT, touchAction: "none", cursor: scale > MIN_SCALE ? "grab" : "default" }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
         onPointerLeave={endDrag}
+        onKeyDown={handleKeyDown}
       >
         {activeUrl ? (
           <div

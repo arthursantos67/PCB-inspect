@@ -51,7 +51,12 @@ export function DefectDistributionChart({
         <CardTitle>Distribution by defect type</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-72" aria-busy={isLoading}>
+        <div
+          className="h-72"
+          aria-busy={isLoading}
+          role="img"
+          aria-label="Bar chart of detection counts by defect class"
+        >
           {rows.length === 0 ? (
             <p className="flex h-full items-center justify-center text-sm text-muted-foreground">
               {isError ? "Failed to load" : isLoading ? "Loading…" : "No detections yet"}
