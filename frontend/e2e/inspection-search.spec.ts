@@ -66,15 +66,11 @@ test("filters the inspections list, combined and alone, with shareable URL state
   await page.getByRole("checkbox", { name: "Missing hole" }).click();
   await expect(page.getByText("No inspections match these filters.")).toBeVisible();
 
-  // --- A hard reload wipes the in-memory session by design (FE-01/section 13 — never
-  // localStorage) and bounces through /login?next=..., but the filtered URL itself must
-  // survive that round trip and land back with every filter restored (FE-04 shareability) ---
+  // --- A hard reload survives without a fresh login (session persisted to localStorage,
+  // FE-01/section 13 — only an explicit logout ends it) and the filtered URL itself must
+  // still be shareable: reload lands back on the same URL with every filter restored ---
   const filteredUrl = page.url();
   await page.reload();
-  await expect(page).toHaveURL(/\/login\?next=/);
-  await page.getByLabel("Email").fill(DEV_ACCOUNT.email);
-  await page.getByLabel("Password").fill(DEV_ACCOUNT.password);
-  await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(filteredUrl);
   await expect(page.getByLabel("Board")).toHaveValue(boardA);
   await expect(page.getByRole("checkbox", { name: "Missing hole" })).toBeChecked();

@@ -22,9 +22,6 @@ test("ingests a board, processes it, and renders the completed analysis", async 
   copyFileSync(path.join(__dirname, "fixtures", "board.jpg"), path.join(batchDir, `${boardNumber}.jpg`));
 
   // --- Log in with the seeded dev account (UC-1) ---
-  // The session lives in memory only, never localStorage (FE-01/section 13) — every
-  // navigation below must stay client-side (nav links, not `page.goto()`) or a hard
-  // reload would wipe it just like a real browser refresh would.
   await page.goto("/login");
   // The submit button starts disabled until `getSetupStatus()` resolves (setupRequired is
   // briefly null) — wait for that settled state before scanning, otherwise the transient

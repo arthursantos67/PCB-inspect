@@ -381,7 +381,7 @@ The system shall ship a native launcher application (section 3.8) that starts th
 
 ### FE-01 Authentication
 
-Login screen; on first run, it doubles as account setup. Session kept in memory; no `localStorage` token storage. Because the app never leaves `localhost`, the login screen is primarily a lightweight gate against casual access to sensitive board/defect data on a shared machine, not a defense against network attackers — see section 13. No email-based "forgot password" flow (no mail server involved); password reset is a local, in-app recovery path available to any other existing account.
+Login screen; on first run, it doubles as account setup. Session (access + refresh token) persisted to `localStorage`, so it survives a reload, a connection-error page, or the launcher window restarting — only an explicit logout ends it. Because the app never leaves `localhost`, the login screen is primarily a lightweight gate against casual access to sensitive board/defect data on a shared machine, not a defense against network attackers — see section 13; that threat model is also why `localStorage` (which a same-machine XSS could theoretically read) isn't a meaningful downgrade here, unlike in a public multi-tenant web app. No email-based "forgot password" flow (no mail server involved); password reset is a local, in-app recovery path available to any other existing account.
 
 ### FE-02 Dashboard
 
@@ -1016,7 +1016,7 @@ All routes beyond `/login` require an authenticated local session; there is no p
 
 - **Localhost-only by default.** Every service (API, frontend, database, Redis) binds to `127.0.0.1`; nothing on the machine is reachable from the network out of the box. This is the system's primary security property (section 3.1) — a system with no listening network service on the LAN/internet has meaningfully less attack surface than any client-server system, on-premise or not.
 - Exposing the interface beyond `localhost` (e.g., to reach it from another device on the same LAN) is an explicit, unsupported opt-in the operator may configure; TLS and network-level access control become the operator's responsibility if they do so.
-- Session authentication via a Bearer token; short-lived access token with refresh; the frontend never stores it in `localStorage`.
+- Session authentication via a Bearer token; short-lived access token with refresh; persisted to `localStorage` so a reload or the launcher window restarting doesn't force a re-login — only an explicit logout ends the session. This deliberately trades a public-web-app default (never `localStorage`, to resist XSS-driven token theft from *another* origin) for one that fits this system's actual threat model: localhost-only, single machine, no other origin in play (see FE-01, section 3.1).
 - Passwords: Argon2id; minimum 10-character policy; progressive lockout after failed attempts.
 - No role hierarchy — any authenticated local account can perform any action (section 2.2); the only per-resource check is ownership for private data like chat sessions.
 - Cloud LLM API keys (when opted into, section 5.2) encrypted at rest (Fernet/AES-GCM with a key from env); the API exposes only `configured` + the last 4 characters.
