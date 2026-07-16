@@ -12,8 +12,8 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Detection, InspectionImage
-from app.models.enums import DefectType, ImageStatus
+from app.models import Analysis, Detection, InspectionImage
+from app.models.enums import AnalysisReviewStatus, DefectType, ImageStatus
 from app.stats.schemas import (
     DefectTypeCount,
     Granularity,
@@ -35,11 +35,12 @@ def period_start(period: Period, *, now: datetime | None = None) -> datetime:
 async def compute_summary(
     db: AsyncSession, *, date_from: datetime | None, date_to: datetime | None
 ) -> StatsSummary:
-    conditions = [InspectionImage.status == ImageStatus.COMPLETED]
+    date_conditions = []
     if date_from is not None:
-        conditions.append(InspectionImage.created_at >= date_from)
+        date_conditions.append(InspectionImage.created_at >= date_from)
     if date_to is not None:
-        conditions.append(InspectionImage.created_at <= date_to)
+        date_conditions.append(InspectionImage.created_at <= date_to)
+    conditions = [InspectionImage.status == ImageStatus.COMPLETED, *date_conditions]
 
     total_inspected = (
         await db.execute(select(func.count(InspectionImage.id)).where(*conditions))
@@ -71,11 +72,33 @@ async def compute_summary(
         else 0.0
     )
 
+    # FR-10's precision metric: rate of validated vs. rejected analyses. Scoped by the same
+    # image-creation-date window as the rest of this summary, joined through `image_id`
+    # since `Analysis` carries its own (agent-pipeline) `created_at`, not the image's.
+    review_counts_stmt = (
+        select(Analysis.review_status, func.count(Analysis.id))
+        .select_from(Analysis)
+        .join(InspectionImage, Analysis.image_id == InspectionImage.id)
+        .where(Analysis.review_status != AnalysisReviewStatus.PENDING, *date_conditions)
+        .group_by(Analysis.review_status)
+    )
+    review_rows = (await db.execute(review_counts_stmt)).all()
+    review_counts = {review_status: count for review_status, count in review_rows}
+    analyses_validated = review_counts.get(AnalysisReviewStatus.VALIDATED, 0)
+    analyses_rejected = review_counts.get(AnalysisReviewStatus.REJECTED, 0)
+    total_reviewed = analyses_validated + analyses_rejected
+    analysis_precision_rate = (
+        round(analyses_validated / total_reviewed * 100, 2) if total_reviewed else None
+    )
+
     return StatsSummary(
         total_inspected=total_inspected,
         total_with_defects=total_with_defects,
         quality_rate=quality_rate,
         last_24h_count=last_24h_count,
+        analyses_validated=analyses_validated,
+        analyses_rejected=analyses_rejected,
+        analysis_precision_rate=analysis_precision_rate,
     )
 
 

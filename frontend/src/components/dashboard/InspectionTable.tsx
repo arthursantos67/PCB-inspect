@@ -8,6 +8,7 @@ import { SeverityBadge } from "@/components/dashboard/SeverityBadge";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { InspectionListItem } from "@/lib/api-client";
+import { BOARD_DISPOSITION_LABEL } from "@/lib/inspection-filters";
 
 function formatDateTime(value: string): string {
   return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -46,6 +47,7 @@ export function InspectionTable({
           <TableHead>Defects</TableHead>
           <TableHead>Severity</TableHead>
           <TableHead>Status</TableHead>
+          <TableHead>Disposition</TableHead>
           <TableHead>Created</TableHead>
         </TableRow>
       </TableHeader>
@@ -82,6 +84,9 @@ export function InspectionTable({
             </TableCell>
             <TableCell>
               <StatusBadge status={item.status} />
+            </TableCell>
+            <TableCell className="text-muted-foreground">
+              {item.disposition ? BOARD_DISPOSITION_LABEL[item.disposition] : "—"}
             </TableCell>
             <TableCell className="text-muted-foreground">
               {formatDateTime(item.created_at)}

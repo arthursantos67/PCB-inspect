@@ -46,6 +46,8 @@ function InspectionsSearchPage() {
         board_number: filters.board_number || undefined,
         status: filters.status || undefined,
         severity: filters.severity || undefined,
+        review_status: filters.review_status || undefined,
+        disposition: filters.disposition || undefined,
         // Dates are UTC (PRD section 11.1) — the date-only picker value is treated as a UTC
         // calendar day, not the browser's local midnight, so filtering stays correct
         // regardless of the operator's timezone.

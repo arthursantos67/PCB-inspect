@@ -189,7 +189,73 @@ async def test_summary_with_no_data_reports_zero(client: AsyncClient) -> None:
         "total_with_defects": 0,
         "quality_rate": 0.0,
         "last_24h_count": 0,
+        "analyses_validated": 0,
+        "analyses_rejected": 0,
+        "analysis_precision_rate": None,
     }
+
+
+# --- Summary: precision metrics (FR-10) ------------------------------------------------------
+
+
+async def test_summary_precision_rate_reflects_validated_vs_rejected(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    model_version = await _make_model_version(db_session)
+    board = await _make_board(db_session, "BATCH-A", "A1")
+    now = datetime.now(UTC)
+
+    from app.analyses.service import create_baseline_analysis
+
+    validated_img = await _make_image(
+        db_session, board, status=ImageStatus.DETECTED, processed_at=now
+    )
+    validated_detection = await _make_detection(
+        db_session, validated_img, model_version, DefectType.MOUSE_BITE
+    )
+    validated_analysis = await create_baseline_analysis(
+        db_session, validated_img, [validated_detection]
+    )
+
+    rejected_img = await _make_image(
+        db_session, board, status=ImageStatus.DETECTED, processed_at=now
+    )
+    rejected_detection = await _make_detection(
+        db_session, rejected_img, model_version, DefectType.SHORT
+    )
+    rejected_analysis = await create_baseline_analysis(
+        db_session, rejected_img, [rejected_detection]
+    )
+
+    pending_img = await _make_image(
+        db_session, board, status=ImageStatus.DETECTED, processed_at=now
+    )
+    pending_detection = await _make_detection(
+        db_session, pending_img, model_version, DefectType.SPUR
+    )
+    await create_baseline_analysis(db_session, pending_img, [pending_detection])
+
+    await db_session.commit()
+
+    validate_response = await client.post(
+        f"/api/v1/analyses/{validated_analysis.id}/review",
+        json={"action": "validated"},
+        headers=_auth_headers(token),
+    )
+    assert validate_response.status_code == 200, validate_response.text
+
+    reject_response = await client.post(
+        f"/api/v1/analyses/{rejected_analysis.id}/review",
+        json={"action": "rejected"},
+        headers=_auth_headers(token),
+    )
+    assert reject_response.status_code == 200, reject_response.text
+
+    body = await _get(client, token, "/api/v1/stats/summary")
+    assert body["analyses_validated"] == 1
+    assert body["analyses_rejected"] == 1
+    assert body["analysis_precision_rate"] == 50.0
 
 
 # --- By defect type: RN-07 + stable categories -----------------------------------------------

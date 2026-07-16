@@ -12,13 +12,23 @@ no agent chain runs.
 import uuid
 from collections.abc import Sequence
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.service import record_audit
 from app.core.errors import ApiError
 from app.inspections.state import transition
 from app.knowledge.defects import DEFECT_KNOWLEDGE_BASE
-from app.models import Analysis, Detection, InspectionImage
-from app.models.enums import AnalysisSource, AnalysisStatus, ImageStatus, Severity, severity_rank
+from app.models import Analysis, AnalysisReview, Detection, InspectionImage
+from app.models.enums import (
+    AnalysisReviewAction,
+    AnalysisReviewStatus,
+    AnalysisSource,
+    AnalysisStatus,
+    ImageStatus,
+    Severity,
+    severity_rank,
+)
 
 
 def compute_severity_max(detections: Sequence[Detection]) -> Severity:
@@ -77,4 +87,59 @@ async def get_analysis(db: AsyncSession, analysis_id: uuid.UUID) -> Analysis:
     analysis = await db.get(Analysis, analysis_id)
     if analysis is None:
         raise ApiError("RESOURCE_NOT_FOUND", "Analysis not found.", 404)
+    return analysis
+
+
+async def list_analysis_reviews(
+    db: AsyncSession, analysis_id: uuid.UUID
+) -> Sequence[AnalysisReview]:
+    """The immutable validate/reject history for `analysis_id` (FR-10) — queryable later
+    independent of `Analysis.review_status`, which only reflects the latest action.
+    """
+    return (
+        await db.scalars(
+            select(AnalysisReview)
+            .where(AnalysisReview.analysis_id == analysis_id)
+            .order_by(AnalysisReview.created_at)
+        )
+    ).all()
+
+
+_REVIEW_STATUS_BY_ACTION: dict[AnalysisReviewAction, AnalysisReviewStatus] = {
+    AnalysisReviewAction.VALIDATED: AnalysisReviewStatus.VALIDATED,
+    AnalysisReviewAction.REJECTED: AnalysisReviewStatus.REJECTED,
+}
+
+
+async def review_analysis(
+    db: AsyncSession,
+    *,
+    actor_id: uuid.UUID,
+    analysis_id: uuid.UUID,
+    action: AnalysisReviewAction,
+    comment: str | None,
+) -> Analysis:
+    """Validate or reject an analysis (FR-10, UC-8): records an immutable `AnalysisReview`
+    row (the queryable history) and projects the latest action onto
+    `Analysis.review_status` (what listings/filters read, Issue 8). Audited per FR-16.
+    """
+    analysis = await get_analysis(db, analysis_id)
+
+    review = AnalysisReview(
+        analysis_id=analysis.id, reviewer_id=actor_id, action=action, comment=comment
+    )
+    db.add(review)
+    analysis.review_status = _REVIEW_STATUS_BY_ACTION[action]
+    await db.flush()
+
+    await record_audit(
+        db,
+        actor_id=actor_id,
+        action=f"analysis.{action.value}",
+        entity_type="analysis",
+        entity_id=analysis.id,
+        payload={"comment": comment},
+    )
+    await db.commit()
+    await db.refresh(analysis)
     return analysis

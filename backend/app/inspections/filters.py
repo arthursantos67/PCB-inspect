@@ -1,7 +1,7 @@
 """Query-parameter -> SQLAlchemy filter/order translation for `GET /api/v1/inspections`
-(FR-07, PRD section 11.3). Scoped to the filters Issue 8 specifies — defect type, batch,
-board, status, severity, date range — `review_status`/`disposition` wait on the entities
-that back them (`AnalysisReview`/`BoardDisposition`, FR-10, a later issue).
+(FR-07, PRD section 11.3). `review_status` and `disposition` (FR-10, Issue 33) filter on
+`Analysis.review_status` and `BoardDisposition.decision` respectively — both already joined
+onto the base query by `app.inspections.router._base_query`.
 """
 
 from dataclasses import dataclass
@@ -10,8 +10,14 @@ from typing import Any, Literal
 
 from sqlalchemy import ColumnElement, Select, case, exists, select
 
-from app.models import Analysis, Batch, Board, Detection, InspectionImage
-from app.models.enums import DefectType, ImageStatus, Severity
+from app.models import Analysis, Batch, Board, BoardDisposition, Detection, InspectionImage
+from app.models.enums import (
+    AnalysisReviewStatus,
+    BoardDispositionDecision,
+    DefectType,
+    ImageStatus,
+    Severity,
+)
 
 Ordering = Literal["created_at", "-created_at", "severity", "-severity"]
 
@@ -31,6 +37,8 @@ class InspectionFilters:
     board_number: str | None = None
     status: ImageStatus | None = None
     severity: Severity | None = None
+    review_status: AnalysisReviewStatus | None = None
+    disposition: BoardDispositionDecision | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
 
@@ -56,6 +64,10 @@ def apply_filters(stmt: Select[Any], filters: InspectionFilters) -> Select[Any]:
         stmt = stmt.where(InspectionImage.status == filters.status)
     if filters.severity:
         stmt = stmt.where(Analysis.severity_max == filters.severity)
+    if filters.review_status:
+        stmt = stmt.where(Analysis.review_status == filters.review_status)
+    if filters.disposition:
+        stmt = stmt.where(BoardDisposition.decision == filters.disposition)
     if filters.date_from:
         stmt = stmt.where(InspectionImage.created_at >= filters.date_from)
     if filters.date_to:

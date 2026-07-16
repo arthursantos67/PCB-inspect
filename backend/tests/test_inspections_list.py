@@ -15,10 +15,21 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Analysis, Batch, Board, Detection, InspectionImage, ModelVersion
+from app.models import (
+    Analysis,
+    Batch,
+    Board,
+    BoardDisposition,
+    Detection,
+    InspectionImage,
+    ModelVersion,
+    User,
+)
 from app.models.enums import (
+    AnalysisReviewStatus,
     AnalysisSource,
     AnalysisStatus,
+    BoardDispositionDecision,
     DefectType,
     ImageSource,
     ImageStatus,
@@ -103,12 +114,19 @@ async def _make_detection(
     return detection
 
 
-async def _make_analysis(db: AsyncSession, image: InspectionImage, severity: Severity) -> Analysis:
+async def _make_analysis(
+    db: AsyncSession,
+    image: InspectionImage,
+    severity: Severity,
+    *,
+    review_status: AnalysisReviewStatus = AnalysisReviewStatus.PENDING,
+) -> Analysis:
     analysis = Analysis(
         image_id=image.id,
         status=AnalysisStatus.COMPLETED,
         source=AnalysisSource.KNOWLEDGE_BASE,
         severity_max=severity,
+        review_status=review_status,
     )
     db.add(analysis)
     await db.flush()
@@ -193,6 +211,7 @@ async def test_returns_documented_pagination_envelope(
         "severity_max",
         "review_status",
         "disposition_recommendation",
+        "disposition",
         "failure_reason",
         "created_at",
         "processed_at",
@@ -279,6 +298,75 @@ async def test_filter_with_no_matches_returns_empty_results(
     token = await _setup_account(client)
     body = await _list(client, token, batch_number="BATCH-DOES-NOT-EXIST")
     assert body == {"count": 0, "next": None, "previous": None, "results": []}
+
+
+# --- Filters: review_status / disposition (FR-10, Issue 33) --------------------------------
+
+
+async def test_filter_by_review_status(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    board = await _make_board(db_session, "BATCH-A", "A1")
+
+    validated_img = await _make_image(db_session, board, created_at=_NOW)
+    await _make_analysis(
+        db_session, validated_img, Severity.LOW, review_status=AnalysisReviewStatus.VALIDATED
+    )
+
+    rejected_img = await _make_image(db_session, board, created_at=_NOW)
+    await _make_analysis(
+        db_session, rejected_img, Severity.LOW, review_status=AnalysisReviewStatus.REJECTED
+    )
+
+    pending_img = await _make_image(db_session, board, created_at=_NOW)
+    await _make_analysis(db_session, pending_img, Severity.LOW)
+
+    await db_session.commit()
+
+    body = await _list(client, token, review_status="VALIDATED")
+    assert _ids(body) == [str(validated_img.id)]
+
+    body = await _list(client, token, review_status="REJECTED")
+    assert _ids(body) == [str(rejected_img.id)]
+
+
+async def test_filter_by_disposition(client: AsyncClient, db_session: AsyncSession) -> None:
+    token = await _setup_account(client)
+    user = await db_session.scalar(select(User).where(User.email == ACCOUNT["email"]))
+    assert user is not None
+    board = await _make_board(db_session, "BATCH-A", "A1")
+
+    approved_img = await _make_image(db_session, board, created_at=_NOW)
+    db_session.add(
+        BoardDisposition(
+            image_id=approved_img.id,
+            decision=BoardDispositionDecision.APPROVED,
+            decided_by=user.id,
+        )
+    )
+
+    discarded_img = await _make_image(db_session, board, created_at=_NOW)
+    db_session.add(
+        BoardDisposition(
+            image_id=discarded_img.id,
+            decision=BoardDispositionDecision.DISCARDED,
+            decided_by=user.id,
+        )
+    )
+
+    no_disposition_img = await _make_image(db_session, board, created_at=_NOW)
+
+    await db_session.commit()
+
+    body = await _list(client, token, disposition="approved")
+    assert _ids(body) == [str(approved_img.id)]
+
+    body = await _list(client, token, disposition="discarded")
+    assert _ids(body) == [str(discarded_img.id)]
+
+    approved_again = await _list(client, token, disposition="approved")
+    assert str(no_disposition_img.id) not in _ids(approved_again)
 
 
 # --- Filters: combined ------------------------------------------------------------------------

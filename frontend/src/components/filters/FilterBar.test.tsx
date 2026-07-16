@@ -62,6 +62,17 @@ describe("FilterBar", () => {
     expect(onChange).toHaveBeenCalledWith({ ...current, status: "COMPLETED" });
   });
 
+  it("commits the review-status and disposition filters (FR-10)", () => {
+    const onChange = vi.fn();
+    renderFilterBar(EMPTY_INSPECTION_FILTERS, onChange);
+
+    fireEvent.change(screen.getByLabelText("Review status"), { target: { value: "VALIDATED" } });
+    expect(onChange).toHaveBeenCalledWith({ ...EMPTY_INSPECTION_FILTERS, review_status: "VALIDATED" });
+
+    fireEvent.change(screen.getByLabelText("Disposition"), { target: { value: "rework" } });
+    expect(onChange).toHaveBeenCalledWith({ ...EMPTY_INSPECTION_FILTERS, disposition: "rework" });
+  });
+
   it("only shows Clear filters once a filter is active, and resets everything when clicked", () => {
     const onChange = vi.fn();
     const { rerender } = renderFilterBar(EMPTY_INSPECTION_FILTERS, onChange);
