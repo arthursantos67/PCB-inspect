@@ -1,16 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useParams, useRouter } from "next/navigation";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { SeverityBadge } from "@/components/dashboard/SeverityBadge";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AnnotatedImageViewer } from "@/components/viewer/AnnotatedImageViewer";
 import { DetectionsPanel } from "@/components/viewer/DetectionsPanel";
 import { useAuthenticatedImage } from "@/hooks/useAuthenticatedImage";
-import { getInspection, type ImageStatus } from "@/lib/api-client";
+import { createChatSession, getInspection, type ImageStatus } from "@/lib/api-client";
 
 const PROCESSING_STEPS: { key: ImageStatus; label: string }[] = [
   { key: "QUEUED", label: "Queued" },
@@ -54,6 +55,7 @@ function formatDateTime(value: string): string {
 export default function InspectionDetailPage() {
   const params = useParams<{ id: string }>();
   const inspectionId = params.id;
+  const router = useRouter();
   const [hoveredDetectionId, setHoveredDetectionId] = useState<string | null>(null);
 
   // Query key prefixed with "inspections" — useEventStream (FE-09) already invalidates that
@@ -61,6 +63,13 @@ export default function InspectionDetailPage() {
   const detailQuery = useQuery({
     queryKey: ["inspections", "detail", inspectionId],
     queryFn: () => getInspection(inspectionId),
+  });
+
+  // FE-03's "Ask about this analysis" entry point: opens a new chat session pre-scoped to
+  // this inspection's analysis, so the operator never has to re-type which board they mean.
+  const askAboutAnalysis = useMutation({
+    mutationFn: (analysisId: string) => createChatSession(analysisId),
+    onSuccess: (session) => router.push(`/chat/${session.id}`),
   });
 
   const detail = detailQuery.data;
@@ -77,6 +86,8 @@ export default function InspectionDetailPage() {
     return <p className="text-sm text-destructive">Failed to load this inspection.</p>;
   }
 
+  const analysis = detail.analysis;
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -86,7 +97,7 @@ export default function InspectionDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={detail.status} />
-          {detail.analysis?.severity_max && <SeverityBadge severity={detail.analysis.severity_max} />}
+          {analysis?.severity_max && <SeverityBadge severity={analysis.severity_max} />}
         </div>
       </div>
 
@@ -141,15 +152,25 @@ export default function InspectionDetailPage() {
         </Card>
       </div>
 
-      {detail.analysis && (
+      {analysis && (
         <Card>
           <CardHeader>
             <CardTitle>Analysis</CardTitle>
+            <CardAction>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => askAboutAnalysis.mutate(analysis.id)}
+                disabled={askAboutAnalysis.isPending}
+              >
+                Ask about this analysis
+              </Button>
+            </CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            {detail.analysis.executive_summary && <p className="text-sm">{detail.analysis.executive_summary}</p>}
+            {analysis.executive_summary && <p className="text-sm">{analysis.executive_summary}</p>}
             <div className="flex flex-col gap-3">
-              {(detail.analysis.per_defect ?? []).map((entry) => (
+              {(analysis.per_defect ?? []).map((entry) => (
                 <div key={entry.detection_id} className="rounded-lg border border-border p-3">
                   <div className="mb-2">
                     <SeverityBadge severity={entry.severity} />

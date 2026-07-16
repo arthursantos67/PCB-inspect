@@ -4,6 +4,8 @@ from app.models.analysis import Analysis
 from app.models.audit_log import AuditLog
 from app.models.batch import Batch
 from app.models.board import Board
+from app.models.chat_message import ChatMessage
+from app.models.chat_session import ChatSession
 from app.models.detection import Detection
 from app.models.inspection_image import InspectionImage
 from app.models.model_version import ModelVersion
@@ -15,6 +17,8 @@ __all__ = [
     "AuditLog",
     "Batch",
     "Board",
+    "ChatMessage",
+    "ChatSession",
     "Detection",
     "InspectionImage",
     "ModelVersion",
