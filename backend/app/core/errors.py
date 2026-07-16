@@ -1,6 +1,7 @@
 """Standardized error envelope (PRD section 11.4): {"error": {code, message, status, details}}."""
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import FastAPI, Request, status
@@ -31,6 +32,21 @@ def _envelope(code: str, message: str, status_code: int, details: dict[str, Any]
     }
 
 
+def _json_safe_errors(errors: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pydantic v2 populates a raised `ValueError`'s `ctx.error` with the exception instance
+    itself (for human inspection), not a JSON-serializable value — a custom
+    `@model_validator` (e.g. `app.inspections.schemas.BBoxIn`) surfaces this directly, so it
+    must be stringified before this goes into a `JSONResponse`.
+    """
+    safe = []
+    for error in errors:
+        ctx = error.get("ctx")
+        if isinstance(ctx, dict) and isinstance(ctx.get("error"), BaseException):
+            error = {**error, "ctx": {**ctx, "error": str(ctx["error"])}}
+        safe.append(error)
+    return safe
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
@@ -49,7 +65,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "VALIDATION_FAILED",
                 "Invalid payload",
                 status.HTTP_400_BAD_REQUEST,
-                {"errors": exc.errors()},
+                {"errors": _json_safe_errors(exc.errors())},
             ),
         )
 

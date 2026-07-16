@@ -9,22 +9,42 @@ from fastapi.responses import FileResponse
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analyses.schemas import AnalysisOut
+from app.analyses import service as analyses_service
+from app.analyses.schemas import AnalysisOut, AnalysisReviewOut
 from app.auth.dependencies import get_current_user
 from app.core.errors import ApiError
 from app.db.session import get_db
+from app.inspections import service
 from app.inspections.filters import InspectionFilters, Ordering, apply_filters, order_by_clauses
 from app.inspections.schemas import (
     AgentAnalysisRequested,
+    AnnotationRequest,
+    BoardDispositionOut,
     DetectionOut,
+    DispositionRequest,
     InspectionBoard,
     InspectionDetail,
     InspectionListItem,
     PaginatedInspections,
 )
 from app.inspections.state import InvalidTransitionError, transition
-from app.models import Analysis, Batch, Board, Detection, InspectionImage, ModelVersion, User
-from app.models.enums import DefectType, ImageStatus, Severity
+from app.models import (
+    Analysis,
+    Batch,
+    Board,
+    BoardDisposition,
+    Detection,
+    InspectionImage,
+    ModelVersion,
+    User,
+)
+from app.models.enums import (
+    AnalysisReviewStatus,
+    BoardDispositionDecision,
+    DefectType,
+    ImageStatus,
+    Severity,
+)
 from app.tasks.pipeline import run_agent_analysis
 
 router = APIRouter(prefix="/api/v1/inspections", tags=["inspections"])
@@ -39,6 +59,7 @@ def _base_query(*entities: Any) -> Select[Any]:
         .outerjoin(Board, InspectionImage.board_id == Board.id)
         .outerjoin(Batch, Board.batch_id == Batch.id)
         .outerjoin(Analysis, Analysis.image_id == InspectionImage.id)
+        .outerjoin(BoardDisposition, BoardDisposition.image_id == InspectionImage.id)
     )
 
 
@@ -77,6 +98,8 @@ async def list_inspections(
     board_number: str | None = Query(default=None),
     status: ImageStatus | None = Query(default=None),
     severity: Severity | None = Query(default=None),
+    review_status: AnalysisReviewStatus | None = Query(default=None),
+    disposition: BoardDispositionDecision | None = Query(default=None),
     date_from: datetime | None = Query(default=None),
     date_to: datetime | None = Query(default=None),
     ordering: Ordering = Query(default="-created_at"),
@@ -89,6 +112,8 @@ async def list_inspections(
         board_number=board_number,
         status=status,
         severity=severity,
+        review_status=review_status,
+        disposition=disposition,
         date_from=date_from,
         date_to=date_to,
     )
@@ -97,14 +122,16 @@ async def list_inspections(
     count = (await db.execute(count_stmt)).scalar() or 0
 
     data_stmt = (
-        apply_filters(_base_query(InspectionImage, Board, Batch, Analysis), filters)
+        apply_filters(
+            _base_query(InspectionImage, Board, Batch, Analysis, BoardDisposition), filters
+        )
         .order_by(*order_by_clauses(ordering))
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
     rows = (await db.execute(data_stmt)).all()
 
-    defect_map = await _load_defect_types(db, [image.id for image, _, _, _ in rows])
+    defect_map = await _load_defect_types(db, [image.id for image, *_ in rows])
 
     results = [
         InspectionListItem(
@@ -118,11 +145,12 @@ async def list_inspections(
             disposition_recommendation=(
                 analysis.disposition_recommendation if analysis is not None else None
             ),
+            disposition=board_disposition.decision if board_disposition is not None else None,
             failure_reason=image.failure_reason,
             created_at=image.created_at,
             processed_at=image.processed_at,
         )
-        for image, board, batch, analysis in rows
+        for image, board, batch, analysis, board_disposition in rows
     ]
 
     return PaginatedInspections(
@@ -157,11 +185,17 @@ async def get_inspection(
     image, board, batch = row
 
     analysis = await db.scalar(select(Analysis).where(Analysis.image_id == inspection_id))
+    disposition = await db.scalar(
+        select(BoardDisposition).where(BoardDisposition.image_id == inspection_id)
+    )
 
     detection_rows = (
         await db.execute(
             select(Detection, ModelVersion.version)
-            .join(ModelVersion, Detection.model_version_id == ModelVersion.id)
+            # Outer join: a manually-annotated detection (FR-10) has no `model_version_id`
+            # at all, not just an unresolvable one — it must still appear on the detail
+            # screen, just with `model_version=None`.
+            .outerjoin(ModelVersion, Detection.model_version_id == ModelVersion.id)
             .where(Detection.image_id == inspection_id, Detection.is_reported.is_(True))
             .order_by(Detection.id)
         )
@@ -170,6 +204,16 @@ async def get_inspection(
     duration_ms = None
     if image.processed_at is not None:
         duration_ms = int((image.processed_at - image.created_at).total_seconds() * 1000)
+
+    analysis_out = None
+    if analysis is not None:
+        analysis_out = AnalysisOut.model_validate(analysis)
+        # `Analysis` has no ORM relationship to its reviews (this codebase queries joins
+        # explicitly rather than via SQLAlchemy relationships, app.models.detection etc.) —
+        # populated separately so the detail screen's history (FR-10, Issue 33) matches
+        # `GET /api/v1/analyses/{id}` exactly, not just an always-empty default.
+        reviews = await analyses_service.list_analysis_reviews(db, analysis.id)
+        analysis_out.reviews = [AnalysisReviewOut.model_validate(review) for review in reviews]
 
     return InspectionDetail(
         id=image.id,
@@ -190,10 +234,15 @@ async def get_inspection(
                 confidence=detection.confidence,
                 is_reported=detection.is_reported,
                 model_version=version,
+                review=detection.review,
+                source=detection.source,
             )
             for detection, version in detection_rows
         ],
-        analysis=AnalysisOut.model_validate(analysis) if analysis is not None else None,
+        analysis=analysis_out,
+        disposition=(
+            BoardDispositionOut.model_validate(disposition) if disposition is not None else None
+        ),
     )
 
 
@@ -264,3 +313,53 @@ async def request_agent_analysis(
     # app.ingestion.service's enqueue-after-commit pattern, section 3.5).
     await asyncio.to_thread(run_agent_analysis.delay, str(image.id))
     return AgentAnalysisRequested()
+
+
+@router.post("/{inspection_id}/disposition", response_model=BoardDispositionOut)
+async def set_board_disposition(
+    inspection_id: uuid.UUID,
+    payload: DispositionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BoardDispositionOut:
+    """Records a board's final disposition (FR-10, UC-5) — shows on this detail screen and
+    on search results (`disposition` filter/field, Issue 8). Audited (FR-16).
+    """
+    disposition = await service.set_disposition(
+        db, actor_id=current_user.id, image_id=inspection_id, decision=payload.decision
+    )
+    return BoardDispositionOut.model_validate(disposition)
+
+
+@router.post(
+    "/{inspection_id}/annotations",
+    response_model=DetectionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def annotate_inspection(
+    inspection_id: uuid.UUID,
+    payload: AnnotationRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DetectionOut:
+    """Annotates a defect the model missed by drawing a bbox + class directly in the image
+    viewer (FR-10, Issue 10) — creates a `Detection` row flagged `source=manual`. Audited
+    (FR-16) and is the input dataset export (FR-18) later packages into training data.
+    """
+    detection = await service.annotate_detection(
+        db,
+        actor_id=current_user.id,
+        image_id=inspection_id,
+        defect_type=payload.defect_type,
+        bbox=payload.bbox,
+    )
+    return DetectionOut(
+        id=detection.id,
+        defect_type=detection.defect_type,
+        bbox=detection.bbox,
+        confidence=detection.confidence,
+        is_reported=detection.is_reported,
+        model_version=None,
+        review=detection.review,
+        source=detection.source,
+    )

@@ -18,6 +18,8 @@ BACKEND_DIR = pathlib.Path(__file__).resolve().parent.parent
 _TABLES_IN_FK_ORDER = (
     "chat_message",
     "chat_session",
+    "analysis_review",
+    "board_disposition",
     "detection",
     "analysis",
     "inspection_image",

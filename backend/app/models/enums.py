@@ -48,6 +48,15 @@ class DetectionReview(enum.StrEnum):
     FALSE_POSITIVE = "false_positive"
 
 
+class DetectionSource(enum.StrEnum):
+    """Provenance flag (FR-10/Issue 33): distinguishes model output from a bbox+class the
+    operator drew directly in the viewer for a defect the model missed.
+    """
+
+    MODEL = "model"
+    MANUAL = "manual"
+
+
 class AnalysisStatus(enum.StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
@@ -78,6 +87,23 @@ class AnalysisReviewStatus(enum.StrEnum):
     PENDING = "PENDING"
     VALIDATED = "VALIDATED"
     REJECTED = "REJECTED"
+
+
+class AnalysisReviewAction(enum.StrEnum):
+    """One `AnalysisReview` row's action (FR-10/Issue 33) — distinct from
+    `AnalysisReviewStatus` (the current state on `Analysis` itself): this is the immutable
+    history of each validate/reject action an operator took, `Analysis.review_status` is just
+    the latest one projected onto the analysis for quick filtering/display.
+    """
+
+    VALIDATED = "validated"
+    REJECTED = "rejected"
+
+
+class BoardDispositionDecision(enum.StrEnum):
+    APPROVED = "approved"
+    REWORK = "rework"
+    DISCARDED = "discarded"
 
 
 class ChatRole(enum.StrEnum):

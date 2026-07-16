@@ -140,6 +140,9 @@ async def test_get_inspection_returns_board_detections_and_model_version(
     assert body["detections"][0]["defect_type"] == "short"
     assert body["detections"][0]["model_version"] == "v1.0.0"
     assert body["detections"][0]["confidence"] == "0.900"
+    assert body["detections"][0]["review"] == "unreviewed"
+    assert body["detections"][0]["source"] == "model"
+    assert body["disposition"] is None
 
 
 async def test_get_inspection_omits_unreported_detections(
@@ -188,6 +191,41 @@ async def test_get_inspection_includes_analysis_once_completed(
     assert body["status"] == "COMPLETED"
     assert body["analysis"]["source"] == "knowledge_base"
     assert body["analysis"]["per_defect"][0]["detection_id"] == str(detection.id)
+
+
+async def test_get_inspection_includes_review_history_on_analysis(
+    client: AsyncClient, db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """FR-10/Issue 33: the detail screen's `analysis.reviews` must match `GET
+    /api/v1/analyses/{id}` — this is the shape the frontend's `ReviewPanel` actually reads,
+    not just the analyses-router's own GET endpoint.
+    """
+    token = await _setup_account(client)
+    model_version = await _make_model_version(db_session)
+    original = tmp_path / "board.jpg"
+    _write_jpeg(original)
+    image = await _make_image(db_session, None, original, status=ImageStatus.DETECTED)
+    detection = await _make_detection(db_session, image, model_version)
+    analysis = await create_baseline_analysis(db_session, image, [detection])
+    await db_session.commit()
+
+    review_response = await client.post(
+        f"/api/v1/analyses/{analysis.id}/review",
+        json={"action": "validated", "comment": "Looks correct."},
+        headers=_auth_headers(token),
+    )
+    assert review_response.status_code == 200, review_response.text
+
+    response = await client.get(
+        f"/api/v1/inspections/{image.id}", headers=_auth_headers(token)
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis"]["review_status"] == "VALIDATED"
+    assert len(body["analysis"]["reviews"]) == 1
+    assert body["analysis"]["reviews"][0]["action"] == "validated"
+    assert body["analysis"]["reviews"][0]["comment"] == "Looks correct."
 
 
 async def test_get_inspection_returns_404_for_unknown_id(client: AsyncClient) -> None:

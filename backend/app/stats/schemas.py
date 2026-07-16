@@ -15,12 +15,19 @@ Granularity = Literal["day", "week", "month"]
 
 
 class StatsSummary(BaseModel):
-    """Backs the dashboard `StatCard` row (FE-02)."""
+    """Backs the dashboard `StatCard` row (FE-02). `analysis_precision_rate` is FR-10's
+    "system precision metrics": the share of *reviewed* analyses (validated or rejected,
+    `Analysis.review_status != PENDING`) that were validated — `None` until at least one
+    review exists, so the dashboard can distinguish "no feedback yet" from "0% validated".
+    """
 
     total_inspected: int
     total_with_defects: int
     quality_rate: float
     last_24h_count: int
+    analyses_validated: int
+    analyses_rejected: int
+    analysis_precision_rate: float | None
 
 
 class DefectTypeCount(BaseModel):

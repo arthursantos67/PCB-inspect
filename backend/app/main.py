@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.health import HealthReport, build_health_report
 from app.db.session import get_db
+from app.detections.router import router as detections_router
 from app.events.sse import router as events_router
 from app.ingestion.router import router as ingestion_router
 from app.inspections.router import router as inspections_router
@@ -40,6 +41,7 @@ app.include_router(ingestion_router)
 app.include_router(inspections_router)
 app.include_router(settings_router)
 app.include_router(analyses_router)
+app.include_router(detections_router)
 app.include_router(events_router)
 app.include_router(stats_router)
 app.include_router(chat_router)

@@ -48,13 +48,14 @@ export default function DashboardPage() {
         <p className="text-sm text-muted-foreground">Live inspection stats and recent analyses.</p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {summaryQuery.isPending ? (
           <>
             <StatCardSkeleton label="Total inspected" />
             <StatCardSkeleton label="Defects detected" />
             <StatCardSkeleton label="Quality rate" />
             <StatCardSkeleton label="Last 24h" />
+            <StatCardSkeleton label="Analysis precision" />
           </>
         ) : (
           <>
@@ -77,6 +78,19 @@ export default function DashboardPage() {
               label="Last 24h"
               value={summaryQuery.isError ? "—" : (summary?.last_24h_count ?? 0).toLocaleString()}
               hint="Completed in the past 24 hours"
+            />
+            <StatCard
+              label="Analysis precision"
+              value={
+                summaryQuery.isError || summary?.analysis_precision_rate == null
+                  ? "—"
+                  : `${summary.analysis_precision_rate.toFixed(1)}%`
+              }
+              hint={
+                summaryQuery.isError
+                  ? undefined
+                  : `${summary?.analyses_validated ?? 0} validated, ${summary?.analyses_rejected ?? 0} rejected`
+              }
             />
           </>
         )}

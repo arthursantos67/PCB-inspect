@@ -236,6 +236,9 @@ export type StatsSummary = {
   total_with_defects: number;
   quality_rate: number;
   last_24h_count: number;
+  analyses_validated: number;
+  analyses_rejected: number;
+  analysis_precision_rate: number | null;
 };
 
 export type TrendPeriod = "7d" | "30d" | "90d";
@@ -283,6 +286,8 @@ export type ImageStatus =
   | "COMPLETED"
   | "FAILED";
 
+export type BoardDispositionDecision = "approved" | "rework" | "discarded";
+
 export type InspectionListItem = {
   id: string;
   status: ImageStatus;
@@ -292,6 +297,7 @@ export type InspectionListItem = {
   severity_max: Severity | null;
   review_status: "PENDING" | "VALIDATED" | "REJECTED" | null;
   disposition_recommendation: "approve" | "rework" | "discard" | null;
+  disposition: BoardDispositionDecision | null;
   failure_reason: string | null;
   created_at: string;
   processed_at: string | null;
@@ -313,6 +319,8 @@ export async function listInspections(params: {
   board_number?: string;
   status?: ImageStatus;
   severity?: Severity;
+  review_status?: "PENDING" | "VALIDATED" | "REJECTED";
+  disposition?: BoardDispositionDecision;
   date_from?: string;
   date_to?: string;
 }): Promise<PaginatedInspections> {
@@ -325,6 +333,8 @@ export async function listInspections(params: {
   if (params.board_number) search.set("board_number", params.board_number);
   if (params.status) search.set("status", params.status);
   if (params.severity) search.set("severity", params.severity);
+  if (params.review_status) search.set("review_status", params.review_status);
+  if (params.disposition) search.set("disposition", params.disposition);
   if (params.date_from) search.set("date_from", params.date_from);
   if (params.date_to) search.set("date_to", params.date_to);
   return apiFetch(`/api/v1/inspections?${search.toString()}`);
@@ -334,6 +344,9 @@ export async function listInspections(params: {
 
 export type BBox = { x1: number; y1: number; x2: number; y2: number };
 
+export type DetectionReview = "unreviewed" | "confirmed" | "false_positive";
+export type DetectionSource = "model" | "manual";
+
 export type Detection = {
   id: string;
   defect_type: DefectType;
@@ -341,7 +354,10 @@ export type Detection = {
   // Serialized as a string by Pydantic's Decimal encoding, not a JSON number.
   confidence: string;
   is_reported: boolean;
-  model_version: string;
+  // null for a manually-drawn detection (FR-10) — it has no producing model version.
+  model_version: string | null;
+  review: DetectionReview;
+  source: DetectionSource;
 };
 
 export type InspectionBoardInfo = {
@@ -359,6 +375,15 @@ export type PerDefectEntry = {
 
 export type AnalysisStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "NEEDS_HUMAN_REVIEW";
 export type AnalysisSource = "knowledge_base" | "agents";
+export type AnalysisReviewAction = "validated" | "rejected";
+
+export type AnalysisReview = {
+  id: string;
+  reviewer_id: string;
+  action: AnalysisReviewAction;
+  comment: string | null;
+  created_at: string;
+};
 
 export type Analysis = {
   id: string;
@@ -370,6 +395,15 @@ export type Analysis = {
   executive_summary: string | null;
   per_defect: PerDefectEntry[] | null;
   review_status: "PENDING" | "VALIDATED" | "REJECTED";
+  reviews: AnalysisReview[];
+  created_at: string;
+};
+
+export type BoardDisposition = {
+  id: string;
+  image_id: string;
+  decision: BoardDispositionDecision;
+  decided_by: string;
   created_at: string;
 };
 
@@ -383,6 +417,7 @@ export type InspectionDetail = {
   duration_ms: number | null;
   detections: Detection[];
   analysis: Analysis | null;
+  disposition: BoardDisposition | null;
 };
 
 export async function getInspection(id: string): Promise<InspectionDetail> {
@@ -393,6 +428,50 @@ export type ImageVariant = "original" | "annotated";
 
 export function inspectionImagePath(id: string, variant: ImageVariant): string {
   return `/api/v1/inspections/${id}/image?variant=${variant}`;
+}
+
+// --- Review, feedback, disposition & manual annotation (FR-10) --------------------------
+
+export async function reviewAnalysis(
+  analysisId: string,
+  action: AnalysisReviewAction,
+  comment?: string
+): Promise<Analysis> {
+  return apiFetch(`/api/v1/analyses/${analysisId}/review`, {
+    method: "POST",
+    body: JSON.stringify({ action, comment: comment || null }),
+  });
+}
+
+export async function submitDetectionFeedback(
+  detectionId: string,
+  review: "confirmed" | "false_positive"
+): Promise<Detection> {
+  return apiFetch(`/api/v1/detections/${detectionId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ review }),
+  });
+}
+
+export async function setBoardDisposition(
+  inspectionId: string,
+  decision: BoardDispositionDecision
+): Promise<BoardDisposition> {
+  return apiFetch(`/api/v1/inspections/${inspectionId}/disposition`, {
+    method: "POST",
+    body: JSON.stringify({ decision }),
+  });
+}
+
+export async function annotateInspection(
+  inspectionId: string,
+  defectType: DefectType,
+  bbox: BBox
+): Promise<Detection> {
+  return apiFetch(`/api/v1/inspections/${inspectionId}/annotations`, {
+    method: "POST",
+    body: JSON.stringify({ defect_type: defectType, bbox }),
+  });
 }
 
 // --- Chat (FR-09, FE-06) -----------------------------------------------------------------

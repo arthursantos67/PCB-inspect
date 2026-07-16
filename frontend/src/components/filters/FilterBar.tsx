@@ -14,8 +14,12 @@ import {
   type DefectType,
 } from "@/lib/chart-colors";
 import {
+  BOARD_DISPOSITIONS,
+  BOARD_DISPOSITION_LABEL,
   EMPTY_INSPECTION_FILTERS,
   hasActiveFilters,
+  REVIEW_STATUSES,
+  REVIEW_STATUS_LABEL,
   type InspectionFilterValues,
 } from "@/lib/inspection-filters";
 
@@ -145,6 +149,48 @@ export function FilterBar({
             {SEVERITIES.map((severity) => (
               <option key={severity} value={severity}>
                 {SEVERITY_LABEL[severity]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="filter-review-status">Review status</Label>
+          <select
+            id="filter-review-status"
+            className={SELECT_CLASS}
+            value={value.review_status}
+            onChange={(event) =>
+              onChange({
+                ...value,
+                review_status: event.target.value as InspectionFilterValues["review_status"],
+              })
+            }
+          >
+            <option value="">All review statuses</option>
+            {REVIEW_STATUSES.map((reviewStatus) => (
+              <option key={reviewStatus} value={reviewStatus}>
+                {REVIEW_STATUS_LABEL[reviewStatus]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="filter-disposition">Disposition</Label>
+          <select
+            id="filter-disposition"
+            className={SELECT_CLASS}
+            value={value.disposition}
+            onChange={(event) =>
+              onChange({
+                ...value,
+                disposition: event.target.value as InspectionFilterValues["disposition"],
+              })
+            }
+          >
+            <option value="">All dispositions</option>
+            {BOARD_DISPOSITIONS.map((disposition) => (
+              <option key={disposition} value={disposition}>
+                {BOARD_DISPOSITION_LABEL[disposition]}
               </option>
             ))}
           </select>

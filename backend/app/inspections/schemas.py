@@ -1,14 +1,17 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from app.analyses.schemas import AnalysisOut
 from app.models.enums import (
     AnalysisReviewStatus,
+    BoardDispositionDecision,
     DefectType,
+    DetectionReview,
+    DetectionSource,
     DispositionRecommendation,
     ImageStatus,
     Severity,
@@ -31,6 +34,7 @@ class InspectionListItem(BaseModel):
     severity_max: Severity | None
     review_status: AnalysisReviewStatus | None
     disposition_recommendation: DispositionRecommendation | None
+    disposition: BoardDispositionDecision | None
     failure_reason: str | None
     created_at: datetime
     processed_at: datetime | None
@@ -59,12 +63,63 @@ class DetectionOut(BaseModel):
     bbox: dict[str, float]
     confidence: Decimal
     is_reported: bool
-    model_version: str
+    model_version: str | None
+    review: DetectionReview
+    source: DetectionSource
 
 
 class InspectionBoard(BaseModel):
     board_number: str | None
     batch_number: str | None
+
+
+class BBoxIn(BaseModel):
+    """A manually-drawn bbox (FR-10) — normalized [0,1], `x1<x2`/`y1<y2` (mirrors the
+    `detection.bbox_normalized_and_ordered` DB check constraint, RN-01), validated here so a
+    malformed box is rejected as `VALIDATION_FAILED` rather than surfacing as a raw
+    `IntegrityError`.
+    """
+
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> Self:
+        for value in (self.x1, self.y1, self.x2, self.y2):
+            if not 0.0 <= value <= 1.0:
+                raise ValueError("bbox coordinates must be within [0, 1]")
+        if self.x1 >= self.x2:
+            raise ValueError("bbox x1 must be less than x2")
+        if self.y1 >= self.y2:
+            raise ValueError("bbox y1 must be less than y2")
+        return self
+
+
+class AnnotationRequest(BaseModel):
+    """`POST /api/v1/inspections/{id}/annotations` body (FR-10) — a defect the model missed,
+    drawn directly in the viewer.
+    """
+
+    defect_type: DefectType
+    bbox: BBoxIn
+
+
+class BoardDispositionOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    image_id: uuid.UUID
+    decision: BoardDispositionDecision
+    decided_by: uuid.UUID
+    created_at: datetime
+
+
+class DispositionRequest(BaseModel):
+    """`POST /api/v1/inspections/{id}/disposition` body (FR-10, UC-5)."""
+
+    decision: BoardDispositionDecision
 
 
 class AgentAnalysisRequested(BaseModel):
@@ -93,3 +148,4 @@ class InspectionDetail(BaseModel):
     duration_ms: int | None
     detections: list[DetectionOut]
     analysis: AnalysisOut | None = None
+    disposition: BoardDispositionOut | None = None

@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
+import { DispositionSelector } from "@/components/analysis/DispositionSelector";
+import { ReviewPanel } from "@/components/analysis/ReviewPanel";
 import { SeverityBadge } from "@/components/dashboard/SeverityBadge";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -95,9 +97,10 @@ export default function InspectionDetailPage() {
           <h1 className="text-lg font-semibold">Board {detail.board.board_number ?? "—"}</h1>
           <p className="text-sm text-muted-foreground">Batch {detail.board.batch_number ?? "—"}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
           <StatusBadge status={detail.status} />
           {analysis?.severity_max && <SeverityBadge severity={analysis.severity_max} />}
+          <DispositionSelector inspectionId={inspectionId} disposition={detail.disposition} />
         </div>
       </div>
 
@@ -128,6 +131,7 @@ export default function InspectionDetailPage() {
           </CardHeader>
           <CardContent>
             <AnnotatedImageViewer
+              inspectionId={inspectionId}
               originalUrl={originalImage.url}
               annotatedUrl={annotatedImage.url}
               annotatedAvailable={annotatedAvailable}
@@ -144,6 +148,7 @@ export default function InspectionDetailPage() {
           </CardHeader>
           <CardContent>
             <DetectionsPanel
+              inspectionId={inspectionId}
               detections={detail.detections}
               hoveredDetectionId={hoveredDetectionId}
               onHoverDetection={setHoveredDetectionId}
@@ -191,6 +196,12 @@ export default function InspectionDetailPage() {
                 </div>
               ))}
             </div>
+            <ReviewPanel
+              inspectionId={inspectionId}
+              analysisId={analysis.id}
+              reviewStatus={analysis.review_status}
+              reviews={analysis.reviews}
+            />
           </CardContent>
         </Card>
       )}
@@ -215,7 +226,7 @@ export default function InspectionDetailPage() {
             </div>
             <div>
               <dt className="text-muted-foreground">Model version</dt>
-              <dd>{detail.detections[0]?.model_version ?? "—"}</dd>
+              <dd>{detail.detections.find((d) => d.model_version)?.model_version ?? "—"}</dd>
             </div>
           </dl>
         </CardContent>

@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -5,8 +6,23 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Analysis, AuditLog, Detection, InspectionImage, ModelVersion
-from app.models.enums import AnalysisSource, DefectType, ImageSource, ImageStatus
+from app.models import (
+    Analysis,
+    AuditLog,
+    BoardDisposition,
+    Detection,
+    InspectionImage,
+    ModelVersion,
+    User,
+)
+from app.models.enums import (
+    AnalysisSource,
+    BoardDispositionDecision,
+    DefectType,
+    DetectionSource,
+    ImageSource,
+    ImageStatus,
+)
 
 
 async def _make_model_version(db_session: AsyncSession, version: str = "v1.0.0") -> ModelVersion:
@@ -108,6 +124,49 @@ async def test_reactivating_after_deactivation_is_allowed(db_session: AsyncSessi
         ModelVersion(version="v2.0.0", weights_path="/weights/best.pt", is_active=True)
     )
     await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_manual_detection_without_model_version_accepted(db_session: AsyncSession) -> None:
+    """FR-10/Issue 33: a manually-drawn detection has no producing model version at all."""
+    image = await _make_image(db_session)
+    db_session.add(
+        Detection(
+            image_id=image.id,
+            defect_type=DefectType.SHORT,
+            bbox={"x1": 0.1, "y1": 0.1, "x2": 0.5, "y2": 0.5},
+            confidence=Decimal("1.000"),
+            is_reported=True,
+            model_version_id=None,
+            source=DetectionSource.MANUAL,
+        )
+    )
+    await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_board_disposition_is_unique_per_image(db_session: AsyncSession) -> None:
+    image = await _make_image(db_session)
+    user = User(
+        email=f"{uuid.uuid4().hex[:8]}@pcb-inspect.local", password_hash="h", full_name="Op"
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    db_session.add(
+        BoardDisposition(
+            image_id=image.id, decision=BoardDispositionDecision.APPROVED, decided_by=user.id
+        )
+    )
+    await db_session.flush()
+
+    db_session.add(
+        BoardDisposition(
+            image_id=image.id, decision=BoardDispositionDecision.REWORK, decided_by=user.id
+        )
+    )
+    with pytest.raises(IntegrityError, match="uq_board_disposition_image_id"):
+        await db_session.flush()
 
 
 @pytest.mark.asyncio
