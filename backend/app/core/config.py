@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     def cors_allow_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
 
+    @property
+    def golden_set_dir(self) -> Path:
+        """Versioned local reference set for golden-set evaluation (FR-12) — alongside
+        app-data, never the (read-only) watch root, so the evaluation job can be pointed at
+        it without needing a dedicated compose volume.
+        """
+        return self.app_data_dir / "golden-set"
+
 
 @lru_cache
 def get_settings() -> Settings:

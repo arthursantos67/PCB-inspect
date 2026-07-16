@@ -111,6 +111,17 @@ class ChatRole(enum.StrEnum):
     ASSISTANT = "assistant"
 
 
+class ModelEvaluationStatus(enum.StrEnum):
+    """Golden-set evaluation state for a registered `ModelVersion` (FR-12, RN-10) —
+    activation is gated on this reaching `COMPLETED` (`app.settings.models_service`).
+    """
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
 _SEVERITY_RANK: dict[Severity, int] = {
     Severity.LOW: 0,
     Severity.MEDIUM: 1,

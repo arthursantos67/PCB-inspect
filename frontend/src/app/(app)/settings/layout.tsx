@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const SETTINGS_NAV_ITEMS = [
   { label: "Ingestion", href: "/settings/ingestion" },
   { label: "Detection & Analysis", href: "/settings/detection" },
+  { label: "Models", href: "/settings/models" },
 ] as const;
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
