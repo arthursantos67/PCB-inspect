@@ -161,7 +161,7 @@ jobs:
         # LLM Configured => No Crash" acceptance criterion) rather than leaving the image
         # stuck in ANALYZING forever with nothing consuming the queue.
         run: |
-          nohup celery -A app.tasks.celery_app worker --pool=gevent --queues=agents \
+          nohup celery -A app.tasks.celery_app worker --pool=threads --queues=agents \
             --loglevel=info > /tmp/pcb-e2e-agent-worker.log 2>&1 &
 
       - name: Wait for API health
