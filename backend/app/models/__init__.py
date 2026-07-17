@@ -11,6 +11,7 @@ from app.models.chat_session import ChatSession
 from app.models.detection import Detection
 from app.models.inspection_image import InspectionImage
 from app.models.model_version import ModelVersion
+from app.models.report import Report
 from app.models.system_config import SystemConfig
 from app.models.user import User
 
@@ -26,6 +27,7 @@ __all__ = [
     "Detection",
     "InspectionImage",
     "ModelVersion",
+    "Report",
     "SystemConfig",
     "User",
 ]

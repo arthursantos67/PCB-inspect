@@ -13,6 +13,8 @@ def test_housekeeping_tasks_route_off_the_agents_queue() -> None:
     assert routes["app.tasks.ingestion.poll_watch_root"]["queue"] == "housekeeping"
     assert routes["app.tasks.alert_monitor.evaluate_thresholds"]["queue"] == "housekeeping"
     assert routes["app.tasks.retention.purge_expired"]["queue"] == "housekeeping"
+    # Report generation (FR-11, Issue 35) must survive a dead/misconfigured agents worker too.
+    assert routes["app.tasks.reports.generate_report"]["queue"] == "housekeeping"
 
 
 def test_inference_and_agents_routes_unchanged() -> None:

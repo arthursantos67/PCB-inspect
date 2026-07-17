@@ -1,7 +1,11 @@
 """Query-parameter -> SQLAlchemy filter/order translation for `GET /api/v1/inspections`
 (FR-07, PRD section 11.3). `review_status` and `disposition` (FR-10, Issue 33) filter on
 `Analysis.review_status` and `BoardDisposition.decision` respectively — both already joined
-onto the base query by `app.inspections.router._base_query`.
+onto the base query by `base_query` below.
+
+Also reused by consolidated report generation (FR-11, Issue 35) so a report's contents are
+guaranteed to match `GET /api/v1/inspections`'s filtering row-for-row rather than risk drifting
+from a re-implementation.
 """
 
 from dataclasses import dataclass
@@ -20,6 +24,18 @@ from app.models.enums import (
 )
 
 Ordering = Literal["created_at", "-created_at", "severity", "-severity"]
+
+
+def base_query(*entities: Any) -> Select[Any]:
+    """`InspectionImage` left-joined with everything `apply_filters` needs to filter on."""
+    return (
+        select(*entities)
+        .select_from(InspectionImage)
+        .outerjoin(Board, InspectionImage.board_id == Board.id)
+        .outerjoin(Batch, Board.batch_id == Batch.id)
+        .outerjoin(Analysis, Analysis.image_id == InspectionImage.id)
+        .outerjoin(BoardDisposition, BoardDisposition.image_id == InspectionImage.id)
+    )
 
 _SEVERITY_RANK: ColumnElement[Any] = case(
     (Analysis.severity_max == Severity.CRITICAL, 3),
@@ -45,7 +61,7 @@ class InspectionFilters:
 
 def apply_filters(stmt: Select[Any], filters: InspectionFilters) -> Select[Any]:
     """Assumes `stmt` already joins `Board`/`Batch`/`Analysis` onto `InspectionImage`
-    (`app.inspections.router._base_query`) — this only adds `WHERE` predicates.
+    (`base_query` above) — this only adds `WHERE` predicates.
     """
     if filters.defect_type:
         stmt = stmt.where(

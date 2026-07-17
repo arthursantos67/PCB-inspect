@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Analysis, Detection, InspectionImage
+from app.models import Analysis, Batch, Board, Detection, InspectionImage
 from app.models.enums import AnalysisReviewStatus, DefectType, ImageStatus
 from app.stats.schemas import (
     DefectTypeCount,
@@ -102,12 +102,27 @@ async def compute_summary(
     )
 
 
-async def compute_by_defect_type(db: AsyncSession) -> StatsByDefectType:
+async def compute_by_defect_type(
+    db: AsyncSession,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> StatsByDefectType:
+    """Date range is optional (all-time by default) — the dashboard distribution chart (FE-02)
+    never passes one, the executive summary report (FR-11, Issue 35) scopes it to the report's
+    period.
+    """
+    conditions = [Detection.is_reported.is_(True), InspectionImage.status == ImageStatus.COMPLETED]
+    if date_from is not None:
+        conditions.append(InspectionImage.created_at >= date_from)
+    if date_to is not None:
+        conditions.append(InspectionImage.created_at <= date_to)
+
     stmt = (
         select(Detection.defect_type, func.count(Detection.id))
         .select_from(Detection)
         .join(InspectionImage, Detection.image_id == InspectionImage.id)
-        .where(Detection.is_reported.is_(True), InspectionImage.status == ImageStatus.COMPLETED)
+        .where(*conditions)
         .group_by(Detection.defect_type)
     )
     counts = {defect_type: count for defect_type, count in (await db.execute(stmt)).all()}
@@ -118,6 +133,37 @@ async def compute_by_defect_type(db: AsyncSession) -> StatsByDefectType:
         # distribution bar chart (FE-02) has a stable, complete set of categories.
         counts=[DefectTypeCount(defect_type=dt, count=counts.get(dt, 0)) for dt in DefectType],
     )
+
+
+async def compute_top_batches(
+    db: AsyncSession,
+    *,
+    date_from: datetime | None,
+    date_to: datetime | None,
+    limit: int = 10,
+) -> list[tuple[str, int]]:
+    """Top batches by reported-defect count (FR-08's "top batches" aggregate) — used by the
+    executive summary report (FR-11, Issue 35). Mirrors `app.chat.tools.get_defect_stats`'s
+    `group_by="batch"` query, the only other place this aggregation already exists.
+    """
+    conditions = [Detection.is_reported.is_(True), InspectionImage.status == ImageStatus.COMPLETED]
+    if date_from is not None:
+        conditions.append(InspectionImage.created_at >= date_from)
+    if date_to is not None:
+        conditions.append(InspectionImage.created_at <= date_to)
+
+    stmt = (
+        select(Batch.batch_number, func.count(Detection.id))
+        .select_from(Detection)
+        .join(InspectionImage, Detection.image_id == InspectionImage.id)
+        .join(Board, InspectionImage.board_id == Board.id)
+        .join(Batch, Board.batch_id == Batch.id)
+        .where(*conditions)
+        .group_by(Batch.batch_number)
+        .order_by(func.count(Detection.id).desc())
+        .limit(limit)
+    )
+    return [(batch_number, count) for batch_number, count in (await db.execute(stmt)).all()]
 
 
 async def compute_trends(
