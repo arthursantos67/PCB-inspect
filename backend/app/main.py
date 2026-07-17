@@ -17,6 +17,7 @@ from app.events.sse import router as events_router
 from app.ingestion.router import router as ingestion_router
 from app.inspections.router import router as inspections_router
 from app.reports.router import router as reports_router
+from app.retention.router import router as retention_router
 from app.settings.models_router import router as models_router
 from app.settings.router import router as settings_router
 from app.stats.router import router as stats_router
@@ -55,6 +56,7 @@ app.include_router(reports_router)
 app.include_router(dataset_exports_router)
 app.include_router(alerts_router)
 app.include_router(audit_router)
+app.include_router(retention_router)
 
 
 @app.get("/health", response_model=HealthReport, tags=["support"])

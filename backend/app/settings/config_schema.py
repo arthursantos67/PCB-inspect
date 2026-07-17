@@ -119,8 +119,13 @@ _VALIDATORS: dict[str, Callable[[str, Any], Any]] = {
     ),
     "watch_mode_enabled": _bool,
     "import_max_size_mb": _positive_number,
-    # Retention (FR-17) and reports/exports output directory (FR-11/FR-18)
+    # Retention (FR-17) and reports/exports output directory (FR-11/FR-18). The `_reports`/
+    # `_exports` overrides are optional — unset (None/"") falls back to `retention_days`
+    # (`app.retention.service`), for operators who want a shorter window on derived artifacts
+    # than on inspection data itself.
     "retention_days": _positive_int,
+    "retention_days_reports": _positive_int,
+    "retention_days_exports": _positive_int,
     "reports_output_dir": _non_empty_str,
 }
 
