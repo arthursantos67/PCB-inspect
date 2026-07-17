@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alerts.router import router as alerts_router
 from app.analyses.router import router as analyses_router
+from app.audit.router import router as audit_router
 from app.auth.router import router as auth_router
 from app.chat.router import router as chat_router
 from app.core.config import get_settings
@@ -53,6 +54,7 @@ app.include_router(chat_router)
 app.include_router(reports_router)
 app.include_router(dataset_exports_router)
 app.include_router(alerts_router)
+app.include_router(audit_router)
 
 
 @app.get("/health", response_model=HealthReport, tags=["support"])
