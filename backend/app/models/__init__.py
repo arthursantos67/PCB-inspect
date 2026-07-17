@@ -12,6 +12,7 @@ from app.models.dataset_export import DatasetExport
 from app.models.detection import Detection
 from app.models.inspection_image import InspectionImage
 from app.models.model_version import ModelVersion
+from app.models.quality_alert import QualityAlert
 from app.models.report import Report
 from app.models.system_config import SystemConfig
 from app.models.user import User
@@ -29,6 +30,7 @@ __all__ = [
     "Detection",
     "InspectionImage",
     "ModelVersion",
+    "QualityAlert",
     "Report",
     "SystemConfig",
     "User",

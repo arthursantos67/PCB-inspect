@@ -29,6 +29,7 @@ _TABLES_IN_FK_ORDER = (
     "model_version",
     "report",
     "dataset_export",
+    "quality_alert",
     "system_config",
     '"user"',
 )

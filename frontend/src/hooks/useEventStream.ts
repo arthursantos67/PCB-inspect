@@ -20,6 +20,7 @@ const INVALIDATED_QUERY_KEYS: readonly string[][] = [
   ["stats"],
   ["reports"],
   ["dataset-exports"],
+  ["alerts"],
 ];
 
 /**
