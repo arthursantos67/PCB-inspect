@@ -206,6 +206,58 @@ export type AgentAnalysisMode = "conditional" | "always" | "on_demand";
 
 export type SecretConfigValue = { configured: boolean; last4: string | null };
 
+// --- Model versions (FR-12, NFR-05) -------------------------------------------------------
+
+export type ModelEvaluationStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+
+export type ModelMetrics = {
+  map50: number;
+  map50_95: number;
+  per_class: Record<string, number>;
+  golden_set_version?: string;
+  image_count?: number;
+};
+
+export type ModelVersion = {
+  id: string;
+  version: string;
+  weights_path: string;
+  metrics: ModelMetrics | null;
+  evaluation_status: ModelEvaluationStatus;
+  evaluation_error: string | null;
+  is_active: boolean;
+  activated_at: string | null;
+  created_at: string;
+};
+
+export async function listModelVersions(): Promise<ModelVersion[]> {
+  return apiFetch("/api/v1/settings/models");
+}
+
+export async function registerModelVersion(payload: {
+  version: string;
+  weights_path: string;
+}): Promise<ModelVersion> {
+  return apiFetch("/api/v1/settings/models", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getModelEvaluation(id: string): Promise<ModelVersion> {
+  return apiFetch(`/api/v1/settings/models/${id}/evaluation`);
+}
+
+export async function activateModelVersion(
+  id: string,
+  payload: { override?: boolean; justification?: string } = {}
+): Promise<ModelVersion> {
+  return apiFetch(`/api/v1/settings/models/${id}/activate`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 // --- Health (FR-15) ----------------------------------------------------------------------
 
 export type HealthStatus = "ok" | "error" | "not_configured";

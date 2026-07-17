@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.security import hash_password
 from app.db.session import AsyncSessionLocal
 from app.models import ModelVersion, SystemConfig, User
+from app.models.enums import ModelEvaluationStatus
 
 DEV_USER_EMAIL = "dev@pcb-inspect.local"
 DEV_USER_PASSWORD = "devpassword123"  # local dev-only seed account, not production
@@ -67,10 +68,22 @@ async def seed() -> None:
             select(ModelVersion).where(ModelVersion.version == MODEL_VERSION)
         )
         if existing_model_version is None:
+            # Dev/demo bootstrap only — activated directly rather than through the FR-12 gate
+            # (`POST /api/v1/settings/models/{id}/activate`), same as this seed already
+            # bypasses every other API-level flow. Metrics mirror the trained model's real,
+            # externally-validated numbers (PRD section 4.1), not a fabricated evaluation.
             session.add(
                 ModelVersion(
                     version=MODEL_VERSION,
                     weights_path="/weights/best.pt",
+                    metrics={
+                        "map50": 0.99,
+                        "map50_95": 0.756,
+                        "per_class": {},
+                        "golden_set_version": "seed",
+                        "image_count": 0,
+                    },
+                    evaluation_status=ModelEvaluationStatus.COMPLETED,
                     is_active=True,
                     activated_at=datetime.now(UTC),
                 )

@@ -117,6 +117,18 @@ def _select_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _instantiate_model(weights_path: str) -> tuple[Any, str]:
+    """Shared by `ensure_model_loaded` (the active version, warm-started) and
+    `load_candidate_weights` (an arbitrary version under golden-set evaluation, FR-12) — both
+    need the exact same load path so evaluation metrics reflect real production behavior, not
+    a separate/trusted-input code path.
+    """
+    device = _select_device()
+    model = _yolo_class()(weights_path)
+    model.to(device)
+    return model, device
+
+
 async def ensure_model_loaded() -> LoadedModel:
     global _loaded
     if _loaded is not None:
@@ -132,9 +144,7 @@ async def ensure_model_loaded() -> LoadedModel:
         raise TransientProcessingError("No active ModelVersion is configured")
 
     try:
-        device = _select_device()
-        model = _yolo_class()(active.weights_path)
-        model.to(device)
+        model, device = _instantiate_model(active.weights_path)
     except Exception as exc:
         raise TransientProcessingError(f"Failed to load model weights: {exc}") from exc
 
@@ -145,6 +155,35 @@ async def ensure_model_loaded() -> LoadedModel:
     logger.info("Loaded model version=%s device=%s", active.version, device)
     await publish_model_status(get_settings(), device=device, model_version=active.version)
     return loaded
+
+
+def load_candidate_weights(weights_path: str) -> tuple[Any, str]:
+    """Loads arbitrary weights for golden-set evaluation (FR-12) — deliberately bypasses and
+    never mutates the warm-started `_loaded` global (RV-01): the active production model must
+    keep serving real inference, unaffected, while a *candidate* version is being evaluated
+    alongside it.
+    """
+    return _instantiate_model(weights_path)
+
+
+async def reload_active_model() -> LoadedModel:
+    """Swaps the warm-started model for whichever `ModelVersion` is now active — the
+    no-downtime half of FR-12's activation switch. Resets the cache and reloads eagerly
+    (inline) rather than waiting for the next `run_inference` task to do it lazily, so the
+    very next task after this one already sees the new weights.
+
+    Never touches a `LoadedModel` a caller already holds a reference to: `_loaded` is only
+    ever *replaced*, not mutated, so any inference task that already called
+    `ensure_model_loaded()` before this runs keeps using the object instance it got for the
+    rest of its own execution — nothing already in flight is interrupted or dropped. Enqueued
+    as a task on the same single-consumer `inference` queue as `run_inference`
+    (`app.tasks.models.reload_inference_model`), which — combined with the worker's
+    `--pool=solo` concurrency of 1 — guarantees this can only ever run strictly before or
+    after an in-flight detection task, never concurrently with one.
+    """
+    global _loaded
+    _loaded = None
+    return await ensure_model_loaded()
 
 
 def reset_loaded_model_for_tests() -> None:
