@@ -705,6 +705,52 @@ export async function downloadDatasetExport(datasetExport: DatasetExport): Promi
   URL.revokeObjectURL(url);
 }
 
+// --- Quality alerts (FR-19, FE-02) --------------------------------------------------------
+
+export type QualityAlertType = "defect_rate_batch" | "defect_rate_window";
+export type QualityAlertStatus = "active" | "acknowledged";
+
+export type QualityAlertContext = {
+  observed_rate: number;
+  threshold: number;
+  batch_id?: string;
+  batch_number?: string;
+  window_minutes?: number;
+  sample_size?: number;
+};
+
+export type QualityAlert = {
+  id: string;
+  type: QualityAlertType;
+  context: QualityAlertContext;
+  status: QualityAlertStatus;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
+  created_at: string;
+};
+
+export type PaginatedAlerts = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: QualityAlert[];
+};
+
+export async function listAlerts(
+  params: { acknowledged?: boolean; page?: number; page_size?: number } = {}
+): Promise<PaginatedAlerts> {
+  const search = new URLSearchParams();
+  if (params.acknowledged !== undefined) search.set("acknowledged", String(params.acknowledged));
+  if (params.page) search.set("page", String(params.page));
+  if (params.page_size) search.set("page_size", String(params.page_size));
+  const query = search.toString();
+  return apiFetch(`/api/v1/alerts${query ? `?${query}` : ""}`);
+}
+
+export async function acknowledgeAlert(id: string): Promise<QualityAlert> {
+  return apiFetch(`/api/v1/alerts/${id}/ack`, { method: "POST" });
+}
+
 // --- Chat (FR-09, FE-06) -----------------------------------------------------------------
 
 export type ChatRole = "user" | "assistant";

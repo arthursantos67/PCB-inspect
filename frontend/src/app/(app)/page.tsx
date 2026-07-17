@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 
+import { AlertsBanner } from "@/components/dashboard/AlertsBanner";
 import { DefectDistributionChart } from "@/components/dashboard/DefectDistributionChart";
 import { DefectTrendChart } from "@/components/dashboard/DefectTrendChart";
 import { InspectionTable } from "@/components/dashboard/InspectionTable";
@@ -47,6 +48,8 @@ export default function DashboardPage() {
         <h1 className="text-lg font-semibold">Dashboard</h1>
         <p className="text-sm text-muted-foreground">Live inspection stats and recent analyses.</p>
       </div>
+
+      <AlertsBanner />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {summaryQuery.isPending ? (

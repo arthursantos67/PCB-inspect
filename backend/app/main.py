@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.alerts.router import router as alerts_router
 from app.analyses.router import router as analyses_router
 from app.auth.router import router as auth_router
 from app.chat.router import router as chat_router
@@ -51,6 +52,7 @@ app.include_router(stats_router)
 app.include_router(chat_router)
 app.include_router(reports_router)
 app.include_router(dataset_exports_router)
+app.include_router(alerts_router)
 
 
 @app.get("/health", response_model=HealthReport, tags=["support"])

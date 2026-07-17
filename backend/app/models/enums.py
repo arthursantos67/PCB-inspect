@@ -135,6 +135,15 @@ class DatasetExportStatus(enum.StrEnum):
     FAILED = "FAILED"
 
 
+class QualityAlertType(enum.StrEnum):
+    """Which threshold a `QualityAlert` was raised against (FR-19) — a single batch's
+    cumulative defect rate, or the rolling `alert_window_minutes` window across all batches.
+    """
+
+    DEFECT_RATE_BATCH = "defect_rate_batch"
+    DEFECT_RATE_WINDOW = "defect_rate_window"
+
+
 class ModelEvaluationStatus(enum.StrEnum):
     """Golden-set evaluation state for a registered `ModelVersion` (FR-12, RN-10) —
     activation is gated on this reaching `COMPLETED` (`app.settings.models_service`).
