@@ -4,9 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const SETTINGS_NAV_ITEMS = [
+  { label: "Accounts", href: "/settings/accounts" },
   { label: "Ingestion", href: "/settings/ingestion" },
   { label: "Detection & Analysis", href: "/settings/detection" },
   { label: "Models", href: "/settings/models" },
+  { label: "Audit", href: "/settings/audit" },
 ] as const;
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {

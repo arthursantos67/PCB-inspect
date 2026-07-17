@@ -872,3 +872,120 @@ export async function sendChatMessage(
     }
   }
 }
+
+// --- Accounts (FR-02, FE-08) -------------------------------------------------------------
+
+export type Account = {
+  id: string;
+  email: string;
+  full_name: string;
+  created_at: string;
+};
+
+export async function listAccounts(): Promise<Account[]> {
+  return apiFetch("/api/v1/users");
+}
+
+export async function createAccount(payload: {
+  email: string;
+  password: string;
+  full_name: string;
+}): Promise<Account> {
+  return apiFetch("/api/v1/users", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export async function updateAccount(
+  id: string,
+  payload: { email?: string; full_name?: string; password?: string }
+): Promise<Account> {
+  return apiFetch(`/api/v1/users/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+}
+
+export async function deleteAccount(id: string): Promise<void> {
+  return apiFetch(`/api/v1/users/${id}`, { method: "DELETE" });
+}
+
+// --- Audit trail (FR-16, FE-08) -----------------------------------------------------------
+
+// Every `action` string a `record_audit(...)` call currently uses across the backend
+// (`app/audit/service.py` callers) — kept here as the single list the audit viewer's filter
+// dropdown and label lookup both draw from, so a newly-audited action only needs one addition.
+export const AUDIT_ACTIONS = [
+  "account.created",
+  "account.updated",
+  "account.removed",
+  "user.login",
+  "config.updated",
+  "model.activated",
+  "model.evaluated",
+  "model.evaluation_failed",
+  "analysis.validated",
+  "analysis.rejected",
+  "board.disposition_set",
+  "detection.reviewed",
+  "detection.annotated",
+  "alert.acknowledged",
+] as const;
+
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
+  "account.created": "Account added",
+  "account.updated": "Account updated",
+  "account.removed": "Account removed",
+  "user.login": "Login",
+  "config.updated": "Configuration changed",
+  "model.activated": "Model activated",
+  "model.evaluated": "Model evaluated",
+  "model.evaluation_failed": "Model evaluation failed",
+  "analysis.validated": "Analysis validated",
+  "analysis.rejected": "Analysis rejected",
+  "board.disposition_set": "Board disposition set",
+  "detection.reviewed": "Detection reviewed",
+  "detection.annotated": "Detection annotated",
+  "alert.acknowledged": "Alert acknowledged",
+};
+
+export type AuditActor = {
+  id: string;
+  email: string;
+  full_name: string;
+};
+
+export type AuditLogEntry = {
+  id: number;
+  actor: AuditActor | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  payload: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type PaginatedAuditLog = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: AuditLogEntry[];
+};
+
+export async function listAuditLog(
+  params: {
+    account_id?: string;
+    action?: string;
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    page_size?: number;
+  } = {}
+): Promise<PaginatedAuditLog> {
+  const search = new URLSearchParams();
+  if (params.account_id) search.set("account_id", params.account_id);
+  if (params.action) search.set("action", params.action);
+  if (params.date_from) search.set("date_from", params.date_from);
+  if (params.date_to) search.set("date_to", params.date_to);
+  if (params.page) search.set("page", String(params.page));
+  if (params.page_size) search.set("page_size", String(params.page_size));
+  const query = search.toString();
+  return apiFetch(`/api/v1/settings/audit${query ? `?${query}` : ""}`);
+}
