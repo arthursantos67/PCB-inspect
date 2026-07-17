@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { label: "Ingestion", href: "/ingestion" },
   { label: "Chat", href: "/chat" },
   { label: "Reports", href: "/reports" },
+  { label: "Dataset Export", href: "/dataset-exports" },
   { label: "Settings", href: "/settings/ingestion" },
 ] as const;
 

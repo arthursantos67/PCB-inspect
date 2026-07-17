@@ -28,6 +28,7 @@ _TABLES_IN_FK_ORDER = (
     "audit_log",
     "model_version",
     "report",
+    "dataset_export",
     "system_config",
     '"user"',
 )
