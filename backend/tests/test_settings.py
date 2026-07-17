@@ -276,6 +276,39 @@ async def test_retention_days_is_configurable(client: AsyncClient) -> None:
     assert response.json()["config"]["retention_days"] == 730
 
 
+async def test_retention_days_reports_and_exports_overrides_are_configurable(
+    client: AsyncClient,
+) -> None:
+    """Per-artifact-type overrides (Issue 39/FR-17) — a shorter window for reports/exports than
+    the base `retention_days` inspection-data window.
+    """
+    token = await _setup_account(client)
+
+    response = await client.patch(
+        "/api/v1/settings/config",
+        json={"config": {"retention_days_reports": 30, "retention_days_exports": 14}},
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    config = response.json()["config"]
+    assert config["retention_days_reports"] == 30
+    assert config["retention_days_exports"] == 14
+
+
+async def test_retention_days_reports_override_rejects_zero(client: AsyncClient) -> None:
+    token = await _setup_account(client)
+
+    response = await client.patch(
+        "/api/v1/settings/config",
+        json={"config": {"retention_days_reports": 0}},
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "CONFIG_INVALID_VALUE"
+
+
 async def test_reports_output_dir_is_created_and_configurable(
     client: AsyncClient, tmp_path: Path
 ) -> None:
