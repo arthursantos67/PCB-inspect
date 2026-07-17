@@ -27,6 +27,7 @@ _TABLES_IN_FK_ORDER = (
     "batch",
     "audit_log",
     "model_version",
+    "report",
     "system_config",
     '"user"',
 )

@@ -13,6 +13,7 @@ from app.detections.router import router as detections_router
 from app.events.sse import router as events_router
 from app.ingestion.router import router as ingestion_router
 from app.inspections.router import router as inspections_router
+from app.reports.router import router as reports_router
 from app.settings.models_router import router as models_router
 from app.settings.router import router as settings_router
 from app.stats.router import router as stats_router
@@ -47,6 +48,7 @@ app.include_router(detections_router)
 app.include_router(events_router)
 app.include_router(stats_router)
 app.include_router(chat_router)
+app.include_router(reports_router)
 
 
 @app.get("/health", response_model=HealthReport, tags=["support"])

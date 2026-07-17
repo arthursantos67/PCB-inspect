@@ -14,6 +14,7 @@ celery_app = Celery(
         "app.tasks.alert_monitor",
         "app.tasks.ingestion",
         "app.tasks.models",
+        "app.tasks.reports",
     ],
 )
 
@@ -36,6 +37,7 @@ celery_app.conf.update(
         "app.tasks.ingestion.poll_watch_root": {"queue": "housekeeping"},
         "app.tasks.alert_monitor.evaluate_thresholds": {"queue": "housekeeping"},
         "app.tasks.retention.purge_expired": {"queue": "housekeeping"},
+        "app.tasks.reports.generate_report": {"queue": "housekeeping"},
         # Both share the inference worker's queue (FR-12) — see app/tasks/models.py's module
         # docstring for why that's what makes the no-downtime activation switch safe.
         "app.tasks.models.run_model_evaluation": {"queue": "inference"},

@@ -111,6 +111,24 @@ class ChatRole(enum.StrEnum):
     ASSISTANT = "assistant"
 
 
+class ReportType(enum.StrEnum):
+    INDIVIDUAL = "individual"
+    CONSOLIDATED = "consolidated"
+    EXECUTIVE = "executive"
+
+
+class ReportFormat(enum.StrEnum):
+    CSV = "csv"
+    XLSX = "xlsx"
+    PDF = "pdf"
+
+
+class ReportStatus(enum.StrEnum):
+    PENDING = "PENDING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
 class ModelEvaluationStatus(enum.StrEnum):
     """Golden-set evaluation state for a registered `ModelVersion` (FR-12, RN-10) —
     activation is gated on this reaching `COMPLETED` (`app.settings.models_service`).

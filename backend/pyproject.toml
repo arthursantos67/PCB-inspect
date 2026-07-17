@@ -27,6 +27,11 @@ dependencies = [
     # Used for the real LLM reachability probe (`app.core.health.check_llm`, issue #30) — was
     # previously only a test-only dependency (FastAPI's `TestClient`/`AsyncClient`).
     "httpx>=0.27",
+    # Report generation (FR-11, issue #35): reportlab needs no system libraries (unlike
+    # e.g. weasyprint's Pango/Cairo dependency), consistent with this project's preference
+    # for pip-only dependencies where possible (see the opencv-python-headless note above).
+    "reportlab>=4.2",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]

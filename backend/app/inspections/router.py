@@ -2,42 +2,36 @@ import asyncio
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import FileResponse
-from sqlalchemy import Select, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analyses import service as analyses_service
-from app.analyses.schemas import AnalysisOut, AnalysisReviewOut
 from app.auth.dependencies import get_current_user
 from app.core.errors import ApiError
 from app.db.session import get_db
 from app.inspections import service
-from app.inspections.filters import InspectionFilters, Ordering, apply_filters, order_by_clauses
+from app.inspections.filters import (
+    InspectionFilters,
+    Ordering,
+    apply_filters,
+    base_query,
+    order_by_clauses,
+)
 from app.inspections.schemas import (
     AgentAnalysisRequested,
     AnnotationRequest,
     BoardDispositionOut,
     DetectionOut,
     DispositionRequest,
-    InspectionBoard,
     InspectionDetail,
     InspectionListItem,
     PaginatedInspections,
 )
 from app.inspections.state import InvalidTransitionError, transition
-from app.models import (
-    Analysis,
-    Batch,
-    Board,
-    BoardDisposition,
-    Detection,
-    InspectionImage,
-    ModelVersion,
-    User,
-)
+from app.models import Analysis, Batch, Board, BoardDisposition, InspectionImage, User
 from app.models.enums import (
     AnalysisReviewStatus,
     BoardDispositionDecision,
@@ -50,38 +44,6 @@ from app.tasks.pipeline import run_agent_analysis
 router = APIRouter(prefix="/api/v1/inspections", tags=["inspections"])
 
 MAX_PAGE_SIZE = 100
-
-
-def _base_query(*entities: Any) -> Select[Any]:
-    return (
-        select(*entities)
-        .select_from(InspectionImage)
-        .outerjoin(Board, InspectionImage.board_id == Board.id)
-        .outerjoin(Batch, Board.batch_id == Batch.id)
-        .outerjoin(Analysis, Analysis.image_id == InspectionImage.id)
-        .outerjoin(BoardDisposition, BoardDisposition.image_id == InspectionImage.id)
-    )
-
-
-async def _load_defect_types(
-    db: AsyncSession, image_ids: list[uuid.UUID]
-) -> dict[uuid.UUID, list[DefectType]]:
-    """Only reported detections feed listings/aggregates (RN-07). Queried separately from the
-    page (rather than joined into it) to avoid duplicating each image row per detection.
-    """
-    if not image_ids:
-        return {}
-    rows = (
-        await db.execute(
-            select(Detection.image_id, Detection.defect_type)
-            .where(Detection.image_id.in_(image_ids), Detection.is_reported.is_(True))
-            .distinct()
-        )
-    ).all()
-    result: dict[uuid.UUID, list[DefectType]] = {}
-    for image_id, defect_type in rows:
-        result.setdefault(image_id, []).append(defect_type)
-    return result
 
 
 def _page_url(request: Request, page: int, page_size: int) -> str:
@@ -118,12 +80,12 @@ async def list_inspections(
         date_to=date_to,
     )
 
-    count_stmt = apply_filters(_base_query(func.count(InspectionImage.id)), filters)
+    count_stmt = apply_filters(base_query(func.count(InspectionImage.id)), filters)
     count = (await db.execute(count_stmt)).scalar() or 0
 
     data_stmt = (
         apply_filters(
-            _base_query(InspectionImage, Board, Batch, Analysis, BoardDisposition), filters
+            base_query(InspectionImage, Board, Batch, Analysis, BoardDisposition), filters
         )
         .order_by(*order_by_clauses(ordering))
         .offset((page - 1) * page_size)
@@ -131,7 +93,7 @@ async def list_inspections(
     )
     rows = (await db.execute(data_stmt)).all()
 
-    defect_map = await _load_defect_types(db, [image.id for image, *_ in rows])
+    defect_map = await service.load_defect_types(db, [image.id for image, *_ in rows])
 
     results = [
         InspectionListItem(
@@ -169,81 +131,10 @@ async def get_inspection(
 ) -> InspectionDetail:
     """Full detail for the analysis detail screen (FE-03, section 11.5); also FR-04's
     progress-polling fallback to SSE — `detections`/`analysis` are just empty/`None` until
-    the pipeline reaches that stage.
+    the pipeline reaches that stage. Also reused by individual report generation (FR-11,
+    Issue 35) via `app.inspections.service.get_inspection_detail`.
     """
-    row = (
-        await db.execute(
-            select(InspectionImage, Board, Batch)
-            .select_from(InspectionImage)
-            .outerjoin(Board, InspectionImage.board_id == Board.id)
-            .outerjoin(Batch, Board.batch_id == Batch.id)
-            .where(InspectionImage.id == inspection_id)
-        )
-    ).first()
-    if row is None:
-        raise ApiError("INSPECTION_NOT_FOUND", "Inspection image not found.", 404)
-    image, board, batch = row
-
-    analysis = await db.scalar(select(Analysis).where(Analysis.image_id == inspection_id))
-    disposition = await db.scalar(
-        select(BoardDisposition).where(BoardDisposition.image_id == inspection_id)
-    )
-
-    detection_rows = (
-        await db.execute(
-            select(Detection, ModelVersion.version)
-            # Outer join: a manually-annotated detection (FR-10) has no `model_version_id`
-            # at all, not just an unresolvable one — it must still appear on the detail
-            # screen, just with `model_version=None`.
-            .outerjoin(ModelVersion, Detection.model_version_id == ModelVersion.id)
-            .where(Detection.image_id == inspection_id, Detection.is_reported.is_(True))
-            .order_by(Detection.id)
-        )
-    ).all()
-
-    duration_ms = None
-    if image.processed_at is not None:
-        duration_ms = int((image.processed_at - image.created_at).total_seconds() * 1000)
-
-    analysis_out = None
-    if analysis is not None:
-        analysis_out = AnalysisOut.model_validate(analysis)
-        # `Analysis` has no ORM relationship to its reviews (this codebase queries joins
-        # explicitly rather than via SQLAlchemy relationships, app.models.detection etc.) —
-        # populated separately so the detail screen's history (FR-10, Issue 33) matches
-        # `GET /api/v1/analyses/{id}` exactly, not just an always-empty default.
-        reviews = await analyses_service.list_analysis_reviews(db, analysis.id)
-        analysis_out.reviews = [AnalysisReviewOut.model_validate(review) for review in reviews]
-
-    return InspectionDetail(
-        id=image.id,
-        status=image.status,
-        board=InspectionBoard(
-            board_number=board.board_number if board is not None else None,
-            batch_number=batch.batch_number if batch is not None else None,
-        ),
-        failure_reason=image.failure_reason,
-        created_at=image.created_at,
-        processed_at=image.processed_at,
-        duration_ms=duration_ms,
-        detections=[
-            DetectionOut(
-                id=detection.id,
-                defect_type=detection.defect_type,
-                bbox=detection.bbox,
-                confidence=detection.confidence,
-                is_reported=detection.is_reported,
-                model_version=version,
-                review=detection.review,
-                source=detection.source,
-            )
-            for detection, version in detection_rows
-        ],
-        analysis=analysis_out,
-        disposition=(
-            BoardDispositionOut.model_validate(disposition) if disposition is not None else None
-        ),
-    )
+    return await service.get_inspection_detail(db, inspection_id)
 
 
 @router.get("/{inspection_id}/image")

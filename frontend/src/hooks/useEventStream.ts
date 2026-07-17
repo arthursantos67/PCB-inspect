@@ -15,7 +15,7 @@ export type EventStreamStatus = "connecting" | "connected" | "reconnecting" | "d
 // Every event is treated purely as "something changed, refetch" (FE-09) — payloads aren't
 // merged into the cache directly, so any pipeline event just invalidates the same two query
 // key prefixes the dashboard (Issue 9) and history screen (Issue 10) will read from.
-const INVALIDATED_QUERY_KEYS: readonly string[][] = [["inspections"], ["stats"]];
+const INVALIDATED_QUERY_KEYS: readonly string[][] = [["inspections"], ["stats"], ["reports"]];
 
 /**
  * Subscribes to `GET /api/v1/events` (FR-14) and invalidates TanStack Query caches on every

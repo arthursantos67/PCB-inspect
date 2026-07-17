@@ -28,6 +28,8 @@ EventType = Literal[
     "detection.completed",
     "analysis.completed",
     "inspection.failed",
+    "report.completed",
+    "report.failed",
 ]
 
 

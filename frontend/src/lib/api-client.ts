@@ -526,6 +526,93 @@ export async function annotateInspection(
   });
 }
 
+// --- Reports (FR-11, FE-07) --------------------------------------------------------------
+
+export type ReportType = "individual" | "consolidated" | "executive";
+export type ReportFormat = "csv" | "xlsx" | "pdf";
+export type ReportStatus = "PENDING" | "COMPLETED" | "FAILED";
+
+export type Report = {
+  id: string;
+  type: ReportType;
+  format: ReportFormat;
+  filters: Record<string, unknown> | null;
+  status: ReportStatus;
+  file_path: string | null;
+  row_count: number | null;
+  error_message: string | null;
+  requested_by: string;
+  created_at: string;
+};
+
+export type PaginatedReports = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: Report[];
+};
+
+export type ReportFiltersInput = {
+  defect_type?: DefectType[];
+  batch_number?: string;
+  board_number?: string;
+  status?: ImageStatus;
+  severity?: Severity;
+  review_status?: "PENDING" | "VALIDATED" | "REJECTED";
+  disposition?: BoardDispositionDecision;
+  date_from?: string;
+  date_to?: string;
+};
+
+export type ReportRequestPayload =
+  | { type: "individual"; format: "pdf"; inspection_id: string }
+  | { type: "consolidated"; format: ReportFormat; filters?: ReportFiltersInput }
+  | { type: "executive"; format: "pdf"; date_from?: string; date_to?: string };
+
+export async function requestReport(payload: ReportRequestPayload): Promise<Report> {
+  return apiFetch("/api/v1/reports", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export async function listReports(params: { page?: number; page_size?: number } = {}): Promise<
+  PaginatedReports
+> {
+  const search = new URLSearchParams();
+  if (params.page) search.set("page", String(params.page));
+  if (params.page_size) search.set("page_size", String(params.page_size));
+  const query = search.toString();
+  return apiFetch(`/api/v1/reports${query ? `?${query}` : ""}`);
+}
+
+export function reportDownloadPath(id: string): string {
+  return `/api/v1/reports/${id}/download`;
+}
+
+/** Downloads the report's file through the authenticated fetch wrapper and saves it via a
+ * throwaway `<a>` + object URL — matches this app never putting the session token in a URL
+ * (section 13/FE-01), so the file can't be fetched with a plain `<a href>` alone.
+ */
+export async function downloadReport(report: Report): Promise<void> {
+  const session = getSession();
+  const headers: Record<string, string> = {};
+  if (session) headers.Authorization = `Bearer ${session.accessToken}`;
+
+  const response = await fetch(`${API_URL}${reportDownloadPath(report.id)}`, { headers });
+  if (!response.ok) {
+    await throwApiError(response);
+    return;
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${report.type}-${report.id}.${report.format}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 // --- Chat (FR-09, FE-06) -----------------------------------------------------------------
 
 export type ChatRole = "user" | "assistant";
