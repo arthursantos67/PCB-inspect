@@ -8,6 +8,10 @@ x-backend-image: &backend-image
     - ${WATCH_ROOT_HOST_PATH:-./data/watch-root}:${WATCH_ROOT:-/data/watch-root}:ro
     - ${APP_DATA_HOST_PATH:-./data/app-data}:${APP_DATA_DIR:-/data/app-data}
     - ./weights:/weights:ro
+  # Lets `host.docker.internal` (the default LLM_BASE_URL host, .env.example) resolve on
+  # plain Docker Engine/Linux hosts too, not just Docker Desktop (Mac/Windows).
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   depends_on:
     db:
       condition: service_healthy
@@ -39,7 +43,7 @@ services:
 
   worker-agents:
     <<: *backend-image
-    command: celery -A app.tasks.celery_app worker --pool=gevent --concurrency=4 --queues=agents --loglevel=info
+    command: celery -A app.tasks.celery_app worker --pool=threads --concurrency=4 --queues=agents --loglevel=info
     environment:
       PYTHONUNBUFFERED: "1"
       WORKER_ROLE: agents
