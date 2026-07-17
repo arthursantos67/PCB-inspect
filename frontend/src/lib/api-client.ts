@@ -613,6 +613,98 @@ export async function downloadReport(report: Report): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
+// --- Dataset exports (FR-18) --------------------------------------------------------------
+
+export type DatasetExportStatus = "PENDING" | "COMPLETED" | "FAILED";
+
+export type DatasetExportManifest = {
+  export_id: string;
+  filters: Record<string, unknown>;
+  classes: string[];
+  statistics: {
+    image_count: number;
+    label_count: number;
+    by_defect_type: Record<string, number>;
+    by_review_status: Record<string, number>;
+  };
+  model_versions: { id: string; version: string }[];
+};
+
+export type DatasetExport = {
+  id: string;
+  filters: Record<string, unknown> | null;
+  status: DatasetExportStatus;
+  manifest: DatasetExportManifest | null;
+  file_path: string | null;
+  error_message: string | null;
+  requested_by: string;
+  created_at: string;
+};
+
+export type PaginatedDatasetExports = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: DatasetExport[];
+};
+
+export type DatasetExportFiltersInput = {
+  defect_type?: DefectType[];
+  review_status?: ("confirmed" | "false_positive")[];
+  date_from?: string;
+  date_to?: string;
+};
+
+export async function requestDatasetExport(
+  filters: DatasetExportFiltersInput = {}
+): Promise<DatasetExport> {
+  return apiFetch("/api/v1/dataset-exports", {
+    method: "POST",
+    body: JSON.stringify({ filters }),
+  });
+}
+
+export async function listDatasetExports(
+  params: { page?: number; page_size?: number } = {}
+): Promise<PaginatedDatasetExports> {
+  const search = new URLSearchParams();
+  if (params.page) search.set("page", String(params.page));
+  if (params.page_size) search.set("page_size", String(params.page_size));
+  const query = search.toString();
+  return apiFetch(`/api/v1/dataset-exports${query ? `?${query}` : ""}`);
+}
+
+export function datasetExportDownloadPath(id: string): string {
+  return `/api/v1/dataset-exports/${id}/download`;
+}
+
+/** Same authenticated-blob-download pattern as `downloadReport` — the session token never
+ * goes in a URL (section 13/FE-01), so a plain `<a href>` can't fetch this directly.
+ */
+export async function downloadDatasetExport(datasetExport: DatasetExport): Promise<void> {
+  const session = getSession();
+  const headers: Record<string, string> = {};
+  if (session) headers.Authorization = `Bearer ${session.accessToken}`;
+
+  const response = await fetch(`${API_URL}${datasetExportDownloadPath(datasetExport.id)}`, {
+    headers,
+  });
+  if (!response.ok) {
+    await throwApiError(response);
+    return;
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `dataset-export-${datasetExport.id}.zip`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 // --- Chat (FR-09, FE-06) -----------------------------------------------------------------
 
 export type ChatRole = "user" | "assistant";

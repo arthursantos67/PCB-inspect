@@ -8,6 +8,7 @@ from app.chat.router import router as chat_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.health import HealthReport, build_health_report
+from app.datasets.router import router as dataset_exports_router
 from app.db.session import get_db
 from app.detections.router import router as detections_router
 from app.events.sse import router as events_router
@@ -49,6 +50,7 @@ app.include_router(events_router)
 app.include_router(stats_router)
 app.include_router(chat_router)
 app.include_router(reports_router)
+app.include_router(dataset_exports_router)
 
 
 @app.get("/health", response_model=HealthReport, tags=["support"])

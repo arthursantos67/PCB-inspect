@@ -15,6 +15,8 @@ def test_housekeeping_tasks_route_off_the_agents_queue() -> None:
     assert routes["app.tasks.retention.purge_expired"]["queue"] == "housekeeping"
     # Report generation (FR-11, Issue 35) must survive a dead/misconfigured agents worker too.
     assert routes["app.tasks.reports.generate_report"]["queue"] == "housekeeping"
+    # Dataset export generation (FR-18, Issue 36) — same rationale.
+    assert routes["app.tasks.dataset_exports.generate_dataset_export"]["queue"] == "housekeeping"
 
 
 def test_inference_and_agents_routes_unchanged() -> None:

@@ -129,6 +129,12 @@ class ReportStatus(enum.StrEnum):
     FAILED = "FAILED"
 
 
+class DatasetExportStatus(enum.StrEnum):
+    PENDING = "PENDING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
 class ModelEvaluationStatus(enum.StrEnum):
     """Golden-set evaluation state for a registered `ModelVersion` (FR-12, RN-10) —
     activation is gated on this reaching `COMPLETED` (`app.settings.models_service`).
