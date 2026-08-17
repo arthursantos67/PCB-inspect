@@ -249,6 +249,36 @@ def test_consolidated_report_pdf_format_produces_a_valid_file(tmp_path: Path) ->
     assert Path(report.file_path).read_bytes().startswith(b"%PDF")
 
 
+def test_consolidated_report_is_limited_to_the_selected_boards(tmp_path: Path) -> None:
+    """The reports screen picks boards from the chosen batch rather than typing one name, so a
+    request can name several at once and the generated file has to hold exactly those.
+    """
+    _run(_set_reports_output_dir(tmp_path))
+    _run(_seed_inspections())
+    user_id = _run(_create_user())
+
+    report_id = _run(
+        _create_report(
+            report_type=ReportType.CONSOLIDATED,
+            report_format=ReportFormat.CSV,
+            requested_by=user_id,
+            filters={"batch_number": "BATCH-A", "board_numbers": ["A2"], "language": "pt"},
+        )
+    )
+
+    generate_report.apply(args=[str(report_id)])
+
+    report = _run(_get_report(report_id))
+    assert report is not None
+    assert report.status == ReportStatus.COMPLETED, report.error_message
+    assert report.row_count == 1  # A2 only, not A1
+
+    content = Path(report.file_path).read_text(encoding="utf-8-sig")
+    assert "Tipo de defeito" in content  # headers in the requested language
+    assert "A2" in content
+    assert "A1" not in content
+
+
 # --- Individual -----------------------------------------------------------------------------
 
 
