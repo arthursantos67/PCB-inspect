@@ -10,10 +10,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
-from app.models import Analysis, ChatMessage, ChatSession
+from app.models import Analysis, Batch, Board, ChatMessage, ChatSession, InspectionImage
 from app.models.enums import ChatRole
 
 _TITLE_MAX_LENGTH = 80
+
+# Mirrors `app.chat.agent.MAX_ATTACHMENTS`: attachments are re-sent in full on every turn, so
+# the cap is enforced here too, where the operator gets a plain error instead of silently
+# losing the attachment they just made.
+MAX_ATTACHMENTS = 5
 
 
 def _derive_title(first_message: str) -> str:
@@ -82,6 +87,67 @@ async def delete_session(db: AsyncSession, session_id: uuid.UUID, *, user_id: uu
     session = await _get_owned_session(db, session_id, user_id=user_id)
     await db.delete(session)
     await db.commit()
+
+
+async def list_attachments(
+    db: AsyncSession, session: ChatSession
+) -> list[tuple[uuid.UUID, str | None, str | None]]:
+    """The session's attached inspections as `(inspection_id, batch_number, board_number)`, in
+    the order they were attached. Ids whose inspection no longer exists (retention purge,
+    FR-17) are dropped from the result — the same silent skip `app.chat.agent` applies when it
+    builds the context, so the chip list on screen matches what the model actually sees.
+    """
+    ids = [uuid.UUID(value) for value in session.attached_inspection_ids]
+    if not ids:
+        return []
+    rows = (
+        await db.execute(
+            select(InspectionImage.id, Batch.batch_number, Board.board_number)
+            .outerjoin(Board, InspectionImage.board_id == Board.id)
+            .outerjoin(Batch, Board.batch_id == Batch.id)
+            .where(InspectionImage.id.in_(ids))
+        )
+    ).all()
+    by_id = {row[0]: (row[0], row[1], row[2]) for row in rows}
+    return [by_id[image_id] for image_id in ids if image_id in by_id]
+
+
+async def attach_inspection(
+    db: AsyncSession, session: ChatSession, inspection_id: uuid.UUID
+) -> ChatSession:
+    image = await db.get(InspectionImage, inspection_id)
+    if image is None:
+        raise ApiError("RESOURCE_NOT_FOUND", "Inspection not found.", 404)
+
+    attached = list(session.attached_inspection_ids)
+    if str(inspection_id) in attached:
+        return session
+    if len(attached) >= MAX_ATTACHMENTS:
+        raise ApiError(
+            "VALIDATION_ERROR",
+            f"A conversation can have at most {MAX_ATTACHMENTS} attached inspections. "
+            "Remove one before attaching another.",
+            422,
+        )
+
+    attached.append(str(inspection_id))
+    # Reassigned rather than mutated in place: SQLAlchemy does not track in-place changes to a
+    # plain JSONB list, so an `.append()` on the attribute would never be flushed.
+    session.attached_inspection_ids = attached
+    await db.commit()
+    await db.refresh(session)
+    return session
+
+
+async def detach_inspection(
+    db: AsyncSession, session: ChatSession, inspection_id: uuid.UUID
+) -> ChatSession:
+    attached = [value for value in session.attached_inspection_ids if value != str(inspection_id)]
+    if len(attached) != len(session.attached_inspection_ids):
+        session.attached_inspection_ids = attached
+        await db.commit()
+        await db.refresh(session)
+    return session
 
 
 async def append_user_message(db: AsyncSession, session: ChatSession, content: str) -> ChatMessage:

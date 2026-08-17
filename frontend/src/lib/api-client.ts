@@ -774,6 +774,7 @@ export type ChatSession = {
   id: string;
   title: string | null;
   context_analysis_id: string | null;
+  attached_inspection_ids: string[];
   created_at: string;
   updated_at: string;
 };
@@ -799,8 +800,42 @@ export async function deleteChatSession(id: string): Promise<void> {
   await apiFetch(`/api/v1/chat/sessions/${id}`, { method: "DELETE" });
 }
 
+// Analyses the operator pinned to a session: they are fed to
+// the model as facts on every turn, instead of hoping it decides to look them up.
+export type ChatAttachment = {
+  inspection_id: string;
+  batch_number: string | null;
+  board_number: string | null;
+};
+
+export async function listChatAttachments(sessionId: string): Promise<{ results: ChatAttachment[] }> {
+  return apiFetch(`/api/v1/chat/sessions/${sessionId}/attachments`);
+}
+
+export async function attachChatInspection(
+  sessionId: string,
+  inspectionId: string
+): Promise<{ results: ChatAttachment[] }> {
+  return apiFetch(`/api/v1/chat/sessions/${sessionId}/attachments`, {
+    method: "POST",
+    body: JSON.stringify({ inspection_id: inspectionId }),
+  });
+}
+
+export async function detachChatInspection(
+  sessionId: string,
+  inspectionId: string
+): Promise<{ results: ChatAttachment[] }> {
+  return apiFetch(`/api/v1/chat/sessions/${sessionId}/attachments/${inspectionId}`, {
+    method: "DELETE",
+  });
+}
+
 export type ChatStreamEvent =
   | { type: "tool_call"; name: string; arguments: Record<string, unknown> }
+  // The model narrated before calling a tool: drop whatever was rendered from this turn so
+  // the narration doesn't sit above the real answer.
+  | { type: "content_reset" }
   | { type: "content_delta"; text: string }
   | { type: "error"; message: string }
   | { type: "done"; message: ChatMessage };
@@ -817,6 +852,8 @@ function parseChatSseChunk(raw: string): ChatStreamEvent | null {
   switch (eventType) {
     case "tool_call":
       return { type: "tool_call", name: data.name, arguments: data.arguments };
+    case "content_reset":
+      return { type: "content_reset" };
     case "content_delta":
       return { type: "content_delta", text: data.text };
     case "error":
@@ -835,11 +872,17 @@ function parseChatSseChunk(raw: string): ChatStreamEvent | null {
  *
  * Manual `fetch()` + SSE line reader, same rationale as `useEventStream` (FE-09): this is a
  * POST body, not something native `EventSource` can send at all.
+ *
+ * Returns as soon as the terminal `done` arrives, cancelling the reader instead of waiting
+ * for the connection to close. The caller re-enables its composer when this promise settles,
+ * so a socket left open by a proxy used to lock the chat until the operator navigated away;
+ * `signal` is the other half of that guarantee.
  */
 export async function sendChatMessage(
   sessionId: string,
   content: string,
-  onEvent: (event: ChatStreamEvent) => void
+  onEvent: (event: ChatStreamEvent) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const session = getSession();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -849,6 +892,7 @@ export async function sendChatMessage(
     method: "POST",
     headers,
     body: JSON.stringify({ content }),
+    signal,
   });
   if (!response.ok || !response.body) {
     await throwApiError(response);
@@ -858,18 +902,26 @@ export async function sendChatMessage(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) return;
-    buffer += decoder.decode(value, { stream: true });
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
 
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const event = parseChatSseChunk(buffer.slice(0, boundary));
-      buffer = buffer.slice(boundary + 2);
-      boundary = buffer.indexOf("\n\n");
-      if (event) onEvent(event);
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const event = parseChatSseChunk(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+        if (event) {
+          onEvent(event);
+          if (event.type === "done") return;
+        }
+      }
     }
+  } finally {
+    // No-op once the body is fully consumed; releases the socket on the early return above.
+    void reader.cancel().catch(() => undefined);
   }
 }
 

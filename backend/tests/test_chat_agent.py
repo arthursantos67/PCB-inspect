@@ -4,6 +4,7 @@ deterministically, mirroring tests/test_agents_chain.py's convention for the ana
 
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -11,12 +12,18 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.llm_client import ChatCompletion, LLMUnavailableError, ToolCallRequest
-from app.chat.agent import MAX_TOOL_ITERATIONS, build_messages, run_turn
+from app.chat.agent import (
+    MAX_HISTORY_MESSAGES,
+    MAX_TOOL_ITERATIONS,
+    build_messages,
+    run_turn,
+)
 from app.chat.errors import ChatAgentUnavailableError
 from app.models import (
     Analysis,
     Batch,
     Board,
+    ChatMessage,
     ChatSession,
     Detection,
     InspectionImage,
@@ -26,6 +33,7 @@ from app.models import (
 from app.models.enums import (
     AnalysisSource,
     AnalysisStatus,
+    ChatRole,
     DefectType,
     ImageSource,
     ImageStatus,
@@ -113,6 +121,14 @@ async def _make_session(
     return session
 
 
+async def _ask(db: AsyncSession, session: ChatSession, content: str) -> None:
+    """Persists the operator's question the way the router does before running a turn — the
+    prompt is built from the transcript, so the question has to be in it.
+    """
+    db.add(ChatMessage(session_id=session.id, role=ChatRole.USER, content=content))
+    await db.commit()
+
+
 async def test_tool_only_facts_the_llm_never_sees_production_data_before_calling_a_tool(
     db_session: AsyncSession,
 ) -> None:
@@ -124,6 +140,7 @@ async def test_tool_only_facts_the_llm_never_sees_production_data_before_calling
     """
     await _make_batch_with_defect(db_session, "BATCH-XYZ", defect_count=17)
     session = await _make_session(db_session)
+    await _ask(db_session, session, "Which batch had the most defects?")
 
     tool_call = ToolCallRequest(
         id="call-1", name="get_defect_stats", arguments={"group_by": "batch"}
@@ -142,7 +159,6 @@ async def test_tool_only_facts_the_llm_never_sees_production_data_before_calling
             client,
             session_id=session.id,
             context_analysis_id=None,
-            user_content="Which batch had the most defects?",
         )
     ]
 
@@ -170,16 +186,93 @@ async def test_tool_only_facts_the_llm_never_sees_production_data_before_calling
     }
 
 
+async def test_run_turn_echoes_provider_extra_content_back_with_the_tool_result(
+    db_session: AsyncSession,
+) -> None:
+    """A tool call the provider signed has to be handed back carrying that signature. Gemini
+    3.x rejects the follow-up request with 400 INVALID_ARGUMENT otherwise, which made every
+    question needing a tool answer "the AI assistant is temporarily unavailable" while bare
+    greetings, which need no tool, kept working.
+    """
+    await _make_batch_with_defect(db_session, "BATCH-SIG", defect_count=3)
+    session = await _make_session(db_session)
+    await _ask(db_session, session, "Which batch had the most defects?")
+
+    signature = {"google": {"thought_signature": "El4KXAER"}}
+    client = _StubChatLLMClient(
+        [
+            ChatCompletion(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-1",
+                        name="get_defect_stats",
+                        arguments={"group_by": "batch"},
+                        extra_content=signature,
+                    )
+                ],
+            ),
+            ChatCompletion(content="BATCH-SIG had 3 defects.", tool_calls=[]),
+        ]
+    )
+
+    async for _event in run_turn(
+        db_session, client, session_id=session.id, context_analysis_id=None
+    ):
+        pass
+
+    assistant_message = next(
+        m for m in client.calls[1] if m["role"] == "assistant" and m.get("tool_calls")
+    )
+    assert assistant_message["tool_calls"][0]["extra_content"] == signature
+
+
+async def test_run_turn_omits_extra_content_when_the_provider_sent_none(
+    db_session: AsyncSession,
+) -> None:
+    """Providers that do not sign their tool calls must not start receiving a null field they
+    never sent — several reject unknown keys outright.
+    """
+    await _make_batch_with_defect(db_session, "BATCH-PLAIN", defect_count=2)
+    session = await _make_session(db_session)
+    await _ask(db_session, session, "Which batch had the most defects?")
+
+    client = _StubChatLLMClient(
+        [
+            ChatCompletion(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-1", name="get_defect_stats", arguments={"group_by": "batch"}
+                    )
+                ],
+            ),
+            ChatCompletion(content="BATCH-PLAIN had 2 defects.", tool_calls=[]),
+        ]
+    )
+
+    async for _event in run_turn(
+        db_session, client, session_id=session.id, context_analysis_id=None
+    ):
+        pass
+
+    assistant_message = next(
+        m for m in client.calls[1] if m["role"] == "assistant" and m.get("tool_calls")
+    )
+    assert "extra_content" not in assistant_message["tool_calls"][0]
+
+
 async def test_run_turn_without_any_tool_call_still_streams_and_completes(
     db_session: AsyncSession,
 ) -> None:
     session = await _make_session(db_session)
+    await _ask(db_session, session, "hi")
     client = _StubChatLLMClient([ChatCompletion(content="Hello! How can I help?", tool_calls=[])])
 
     events = [
         event
         async for event in run_turn(
-            db_session, client, session_id=session.id, context_analysis_id=None, user_content="hi"
+            db_session, client, session_id=session.id, context_analysis_id=None
         )
     ]
 
@@ -193,6 +286,7 @@ async def test_run_turn_without_any_tool_call_still_streams_and_completes(
 async def test_run_turn_bounds_the_tool_calling_loop(db_session: AsyncSession) -> None:
     """A misbehaving model that keeps calling tools forever must not hang the request."""
     session = await _make_session(db_session)
+    await _ask(db_session, session, "hi")
     endless_tool_call = ToolCallRequest(
         id="call", name="get_defect_knowledge", arguments={"defect_type": "spur"}
     )
@@ -205,7 +299,7 @@ async def test_run_turn_bounds_the_tool_calling_loop(db_session: AsyncSession) -
 
     with pytest.raises(ChatAgentUnavailableError):
         async for _ in run_turn(
-            db_session, client, session_id=session.id, context_analysis_id=None, user_content="hi"
+            db_session, client, session_id=session.id, context_analysis_id=None
         ):
             pass
 
@@ -214,6 +308,7 @@ async def test_run_turn_bounds_the_tool_calling_loop(db_session: AsyncSession) -
 
 async def test_run_turn_raises_when_llm_is_unreachable(db_session: AsyncSession) -> None:
     session = await _make_session(db_session)
+    await _ask(db_session, session, "hi")
 
     class _RaisingClient:
         async def complete_chat(self, **kwargs: Any) -> ChatCompletion:
@@ -225,17 +320,17 @@ async def test_run_turn_raises_when_llm_is_unreachable(db_session: AsyncSession)
             _RaisingClient(),
             session_id=session.id,
             context_analysis_id=None,
-            user_content="hi",
         ):
             pass
 
 
-async def test_context_scoped_session_preloads_the_analysis_via_a_synthetic_tool_call(
+async def test_context_scoped_session_preloads_the_analysis_as_application_context(
     db_session: AsyncSession,
 ) -> None:
     """FE-03's "Ask about this analysis" entry point: the operator never re-types which board
-    they mean — but per the Tool-Only Facts invariant, that context must still enter the
-    conversation as a tool result, not a bare injected string.
+    they mean — but per the Tool-Only Facts invariant, that context must still be verbatim
+    `execute_tool` output, labelled as the application's and not as something the operator
+    typed.
     """
     model_version = ModelVersion(version=f"v-{uuid.uuid4().hex[:8]}", weights_path="/x.pt")
     db_session.add(model_version)
@@ -264,17 +359,116 @@ async def test_context_scoped_session_preloads_the_analysis_via_a_synthetic_tool
     )
     db_session.add(analysis)
     await db_session.commit()
+    session = await _make_session(db_session, context_analysis_id=analysis.id)
+    await _ask(db_session, session, "What's the severity here?")
+
+    messages = await build_messages(
+        db_session,
+        session_id=session.id,
+        context_analysis_id=analysis.id,
+    )
+
+    # The get_analysis result, injected before the user's question and marked as coming from
+    # the application. Not a synthesized assistant tool-call: a fabricated call is rejected
+    # outright by providers that sign their own (`_preloaded_context_message`).
+    assert messages[1]["role"] == "user"
+    assert "get_analysis" in messages[1]["content"]
+    assert "Application context" in messages[1]["content"]
+    assert "unique-marker-summary" in messages[1]["content"]
+    assert not any(m.get("tool_calls") or m["role"] == "tool" for m in messages)
+    # The question comes from the transcript and is sent exactly once: the router persists it
+    # before the turn runs, so appending it again would duplicate it.
+    assert messages[-1] == {"role": "user", "content": "What's the severity here?"}
+    assert [m for m in messages if m["role"] == "user"] == [messages[1], messages[-1]]
+
+
+async def test_attached_inspections_are_preloaded_as_application_context(
+    db_session: AsyncSession,
+) -> None:
+    """An inspection the operator attached by hand is re-sent on every turn, through the same
+    preloaded-context channel the Tool-Only Facts invariant requires.
+    """
+    model_version = ModelVersion(version=f"v-{uuid.uuid4().hex[:8]}", weights_path="/x.pt")
+    db_session.add(model_version)
+    await db_session.flush()
+    batch = Batch(batch_number="BATCH-ATTACH")
+    db_session.add(batch)
+    await db_session.flush()
+    board = Board(batch_id=batch.id, board_number="B9")
+    db_session.add(board)
+    await db_session.flush()
+    image = InspectionImage(
+        board_id=board.id,
+        source=ImageSource.WATCH_FOLDER,
+        original_path="/tmp/attached.jpg",
+        checksum_sha256=uuid.uuid4().hex,
+        status=ImageStatus.COMPLETED,
+    )
+    db_session.add(image)
+    await db_session.flush()
+    db_session.add(
+        Analysis(
+            image_id=image.id,
+            status=AnalysisStatus.COMPLETED,
+            source=AnalysisSource.KNOWLEDGE_BASE,
+            severity_max=Severity.HIGH,
+            executive_summary="attached-marker-summary",
+        )
+    )
+    await db_session.commit()
 
     messages = await build_messages(
         db_session,
         session_id=uuid.uuid4(),
-        context_analysis_id=analysis.id,
-        user_content="What's the severity here?",
+        context_analysis_id=None,
+        attached_inspection_ids=[str(image.id)],
     )
 
-    # A tool-call/tool-result pair for get_analysis, injected before the user's question.
-    assert messages[1]["role"] == "assistant"
-    assert messages[1]["tool_calls"][0]["function"]["name"] == "get_analysis"
-    assert messages[2]["role"] == "tool"
-    assert "unique-marker-summary" in messages[2]["content"]
-    assert messages[-1] == {"role": "user", "content": "What's the severity here?"}
+    assert messages[1]["role"] == "user"
+    assert "get_analysis" in messages[1]["content"]
+    assert "attached-marker-summary" in messages[1]["content"]
+
+
+async def test_attachment_whose_inspection_is_gone_is_skipped(db_session: AsyncSession) -> None:
+    """An attachment can outlive its inspection (retention purge, FR-17). Feeding the model a
+    tool error it might repeat as a finding would be worse than saying nothing.
+    """
+    session = await _make_session(db_session)
+    await _ask(db_session, session, "And this one?")
+
+    messages = await build_messages(
+        db_session,
+        session_id=session.id,
+        context_analysis_id=None,
+        attached_inspection_ids=[str(uuid.uuid4())],
+    )
+
+    assert [m["role"] for m in messages] == ["system", "user"]
+
+
+async def test_history_is_trimmed_to_the_most_recent_turns(db_session: AsyncSession) -> None:
+    """Everything in the window is re-processed on every turn, so old turns are dropped from
+    what the model sees. Nothing is deleted from the transcript itself.
+    """
+    session = await _make_session(db_session)
+    for index in range(MAX_HISTORY_MESSAGES + 6):
+        db_session.add(
+            ChatMessage(
+                session_id=session.id,
+                role=ChatRole.USER,
+                content=f"turn-{index}",
+                created_at=datetime.now(UTC) + timedelta(seconds=index),
+            )
+        )
+    await db_session.commit()
+
+    messages = await build_messages(
+        db_session,
+        session_id=session.id,
+        context_analysis_id=None,
+    )
+
+    history = [m["content"] for m in messages[1:]]
+    assert len(history) == MAX_HISTORY_MESSAGES
+    assert history[0] == "turn-6"
+    assert history[-1] == f"turn-{MAX_HISTORY_MESSAGES + 5}"

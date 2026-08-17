@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     environment: str = "development"
     secret_key: str = Field(default="dev-secret-change-me")
 
+    # Language a station starts in, before anyone picks one in Settings (issue #50). Only the
+    # *initial* value: once `ui_language` is set in `SystemConfig` it wins, same as every other
+    # runtime setting (FR-13).
+    default_language: Literal["en", "pt"] = "en"
+
     # Database
     database_url: str = "postgresql+asyncpg://pcb_inspect:pcb_inspect@db:5432/pcb_inspect"
 

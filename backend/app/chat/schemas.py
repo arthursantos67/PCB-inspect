@@ -22,8 +22,29 @@ class ChatSessionOut(BaseModel):
     id: uuid.UUID
     title: str | None
     context_analysis_id: uuid.UUID | None
+    attached_inspection_ids: list[str] = []
     created_at: datetime
     updated_at: datetime
+
+
+class ChatAttachmentCreate(BaseModel):
+    """`POST /api/v1/chat/sessions/{id}/attachments` body — pins one inspection's analysis to
+    the conversation.
+    """
+
+    inspection_id: uuid.UUID
+
+
+class ChatAttachmentOut(BaseModel):
+    """An attached inspection, with the labels the chat screen shows on its chip."""
+
+    inspection_id: uuid.UUID
+    batch_number: str | None
+    board_number: str | None
+
+
+class ChatSessionAttachments(BaseModel):
+    results: list[ChatAttachmentOut]
 
 
 class ChatMessageOut(BaseModel):
