@@ -14,8 +14,8 @@ class QualityAlert(Base):
     """A defect-rate threshold crossing (FR-19, section 10.2) — persisted by
     `app.tasks.alert_monitor.evaluate_thresholds` and surfaced as a dashboard banner (FE-02)
     until acknowledged (audited, FR-16). `acknowledged_by IS NULL` is what "active" means; there
-    is no separate status column (this alert only ever has two states, unlike `Report`/
-    `DatasetExport`'s multi-stage async generation).
+    is no separate status column (this alert only ever has two states, unlike `Report`'s
+    multi-stage async generation).
 
     `context` carries the scope/observed-rate/threshold triple the PRD's ERD describes (batch
     number or window size, the rate that tripped it, the configured threshold) — same

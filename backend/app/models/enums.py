@@ -129,12 +129,6 @@ class ReportStatus(enum.StrEnum):
     FAILED = "FAILED"
 
 
-class DatasetExportStatus(enum.StrEnum):
-    PENDING = "PENDING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-
-
 class QualityAlertType(enum.StrEnum):
     """Which threshold a `QualityAlert` was raised against (FR-19) — a single batch's
     cumulative defect rate, or the rolling `alert_window_minutes` window across all batches.

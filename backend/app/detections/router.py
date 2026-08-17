@@ -20,7 +20,7 @@ async def submit_detection_feedback(
     current_user: User = Depends(get_current_user),
 ) -> DetectionFeedbackOut:
     """Mark a detection `confirmed`/`false_positive` (FR-10) — independently of the
-    analysis-level review. Audited (FR-16) and feeds dataset export (FR-18).
+    analysis-level review. Audited (FR-16).
     """
     detection = await service.set_detection_review(
         db, actor_id=current_user.id, detection_id=detection_id, review=payload.review
