@@ -8,7 +8,6 @@ from app.models.board import Board
 from app.models.board_disposition import BoardDisposition
 from app.models.chat_message import ChatMessage
 from app.models.chat_session import ChatSession
-from app.models.dataset_export import DatasetExport
 from app.models.detection import Detection
 from app.models.inspection_image import InspectionImage
 from app.models.model_version import ModelVersion
@@ -26,7 +25,6 @@ __all__ = [
     "BoardDisposition",
     "ChatMessage",
     "ChatSession",
-    "DatasetExport",
     "Detection",
     "InspectionImage",
     "ModelVersion",

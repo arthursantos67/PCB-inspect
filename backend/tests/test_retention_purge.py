@@ -7,8 +7,8 @@ Acceptance criteria covered:
 - Correct Cutoff: only records strictly past the configured retention window are purged.
 - Watch Root Untouched: a derived-file path that resolves under the configured watch root is
   never removed, even if it were (mis)recorded as such.
-- Derived Files Cleaned Up: purging a row also removes its annotated image / report file /
-  export ZIP from disk.
+- Derived Files Cleaned Up: purging a row also removes its annotated image / report file from
+  disk.
 - Audited: each purge run produces one `AuditLog` row summarizing counts per entity type.
 - Dry-Run Available: `preview_purge` (and its API route) reports what would be purged without
   deleting anything.
@@ -32,7 +32,6 @@ from app.models import (
     Analysis,
     AuditLog,
     ChatSession,
-    DatasetExport,
     Detection,
     InspectionImage,
     Report,
@@ -42,7 +41,6 @@ from app.models import (
 from app.models.enums import (
     AnalysisSource,
     AnalysisStatus,
-    DatasetExportStatus,
     DefectType,
     ImageSource,
     ImageStatus,
@@ -137,21 +135,6 @@ async def _create_report(
         return report.id
 
 
-async def _create_dataset_export(
-    *, created_at: datetime, file_path: str | None, requested_by: uuid.UUID
-) -> uuid.UUID:
-    async with task_db_session() as db:
-        export = DatasetExport(
-            status=DatasetExportStatus.COMPLETED,
-            file_path=file_path,
-            requested_by=requested_by,
-            created_at=created_at,
-        )
-        db.add(export)
-        await db.commit()
-        return export.id
-
-
 async def _get(model: type, row_id: Any) -> Any:
     async with task_db_session() as db:
         return await db.get(model, row_id)
@@ -172,7 +155,6 @@ _TABLES_IN_FK_ORDER = (
     "inspection_image",
     "audit_log",
     "report",
-    "dataset_export",
     "system_config",
     '"user"',
 )
@@ -269,18 +251,13 @@ def test_purge_detaches_chat_sessions_before_deleting_their_analysis(tmp_path: P
     assert session.context_analysis_id is None
 
 
-def test_purge_removes_expired_reports_and_dataset_exports(tmp_path: Path) -> None:
+def test_purge_removes_expired_reports(tmp_path: Path) -> None:
     user_id = _run(_create_user())
 
     expired_report_file = tmp_path / "expired-report.pdf"
     expired_report_file.write_bytes(b"pdf")
     fresh_report_file = tmp_path / "fresh-report.pdf"
     fresh_report_file.write_bytes(b"pdf")
-
-    expired_export_file = tmp_path / "expired-export.zip"
-    expired_export_file.write_bytes(b"zip")
-    fresh_export_file = tmp_path / "fresh-export.zip"
-    fresh_export_file.write_bytes(b"zip")
 
     expired_report_id = _run(
         _create_report(
@@ -294,32 +271,13 @@ def test_purge_removes_expired_reports_and_dataset_exports(tmp_path: Path) -> No
             created_at=_days_ago(1), file_path=str(fresh_report_file), requested_by=user_id
         )
     )
-    expired_export_id = _run(
-        _create_dataset_export(
-            created_at=_days_ago(731),
-            file_path=str(expired_export_file),
-            requested_by=user_id,
-        )
-    )
-    fresh_export_id = _run(
-        _create_dataset_export(
-            created_at=_days_ago(1), file_path=str(fresh_export_file), requested_by=user_id
-        )
-    )
-
     summary = _run(_run_execute_purge())
 
     assert summary.counts["reports"] == 1
-    assert summary.counts["dataset_exports"] == 1
     assert _run(_get(Report, expired_report_id)) is None
     assert not expired_report_file.exists()
     assert _run(_get(Report, fresh_report_id)) is not None
     assert fresh_report_file.exists()
-
-    assert _run(_get(DatasetExport, expired_export_id)) is None
-    assert not expired_export_file.exists()
-    assert _run(_get(DatasetExport, fresh_export_id)) is not None
-    assert fresh_export_file.exists()
 
 
 def test_report_retention_override_is_shorter_than_base_inspection_retention(
@@ -479,7 +437,6 @@ def test_running_purge_twice_with_nothing_newly_expired_is_a_safe_no_op(tmp_path
     assert second.counts["detections"] == 0
     assert second.counts["analyses"] == 0
     assert second.counts["reports"] == 0
-    assert second.counts["dataset_exports"] == 0
     assert second.counts["files_removed"] == 0
 
 

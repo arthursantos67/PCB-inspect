@@ -30,8 +30,6 @@ EventType = Literal[
     "inspection.failed",
     "report.completed",
     "report.failed",
-    "dataset_export.completed",
-    "dataset_export.failed",
     "alert.defect_rate",
 ]
 

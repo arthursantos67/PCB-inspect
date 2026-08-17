@@ -1,6 +1,6 @@
 """Retention purge (FR-17) — the housekeeping-queue beat task (`app.tasks.celery_app`, once a
-day) that deletes `InspectionImage`/`Detection`/`Analysis`, `Report`, and `DatasetExport` rows
-past their configured retention window, and the derived files that go with them. The actual
+day) that deletes `InspectionImage`/`Detection`/`Analysis` and `Report` rows past their
+configured retention window, and the derived files that go with them. The actual
 cutoff/query/delete/audit logic lives in `app.retention.service` — kept out of this module so it
 can be exercised directly in tests without going through Celery, same convention as
 `app.tasks.alert_monitor`.

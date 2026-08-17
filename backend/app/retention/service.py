@@ -1,8 +1,8 @@
-"""Retention policy purge (FR-17, RN-08) — deletes `InspectionImage`/`Detection`/`Analysis`,
-`Report` (Issue 20), and `DatasetExport` (Issue 21) rows once they're strictly past their
-configured retention window, along with their derived files (annotated image, report file,
-export ZIP). Original camera-captured files under the watch root, and every other row in the
-database (including `AuditLog` itself, RN-08), are never touched.
+"""Retention policy purge (FR-17, RN-08) — deletes `InspectionImage`/`Detection`/`Analysis`
+and `Report` (Issue 20) rows once they're strictly past their configured retention window,
+along with their derived files (annotated image, report file). Original camera-captured files
+under the watch root, and every other row in the database (including `AuditLog` itself,
+RN-08), are never touched.
 
 `preview_purge` and `execute_purge` share the same cutoff/query logic so a dry-run can never
 drift from what a real run would actually delete — the only difference is whether rows are
@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.service import record_audit
 from app.core.config import get_settings
-from app.models import Analysis, ChatSession, DatasetExport, Detection, InspectionImage, Report
+from app.models import Analysis, ChatSession, Detection, InspectionImage, Report
 from app.settings.service import get_config_value
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ async def _retention_days(db: AsyncSession, *, override_key: str | None = None) 
 async def _watch_root(db: AsyncSession) -> Path:
     """The operator-configured watch root (`watch_root_path`, FR-13/FR-03) — falling back to the
     env-configured default (`app.core.config.Settings.watch_root`) if never overridden, same
-    convention as `reports_output_dir` in `app.tasks.reports`/`app.tasks.dataset_exports`.
+    convention as `reports_output_dir` in `app.tasks.reports`.
     """
     configured = await get_config_value(
         db, "watch_root_path", default=str(get_settings().watch_root)
@@ -58,16 +58,14 @@ async def _cutoffs(db: AsyncSession) -> dict[str, datetime]:
     now = datetime.now(UTC)
     inspections_days = await _retention_days(db)
     reports_days = await _retention_days(db, override_key="retention_days_reports")
-    exports_days = await _retention_days(db, override_key="retention_days_exports")
     return {
         "inspections": now - timedelta(days=inspections_days),
         "reports": now - timedelta(days=reports_days),
-        "exports": now - timedelta(days=exports_days),
     }
 
 
 def _remove_derived_file(path_str: str | None, *, watch_root: Path) -> int:
-    """Removes a derived file (annotated image / report / export ZIP) from disk. Returns 1 if a
+    """Removes a derived file (annotated image / report file) from disk. Returns 1 if a
     file was actually removed, 0 otherwise (already missing, no path recorded, or — as a defensive
     safety net, since this should never be reachable by construction — the path resolves under
     the watch root).
@@ -101,11 +99,6 @@ async def _expired_reports(db: AsyncSession, cutoff: datetime) -> list[Report]:
     return list(result)
 
 
-async def _expired_dataset_exports(db: AsyncSession, cutoff: datetime) -> list[DatasetExport]:
-    result = await db.scalars(select(DatasetExport).where(DatasetExport.created_at < cutoff))
-    return list(result)
-
-
 async def _counts_for_images(
     db: AsyncSession, image_ids: list[uuid.UUID]
 ) -> tuple[int, list[Analysis]]:
@@ -134,7 +127,6 @@ def _build_summary(
     detection_count: int,
     analysis_count: int,
     report_count: int,
-    export_count: int,
     files_removed: int | None = None,
 ) -> PurgeSummary:
     counts = {
@@ -142,7 +134,6 @@ def _build_summary(
         "detections": detection_count,
         "analyses": analysis_count,
         "reports": report_count,
-        "dataset_exports": export_count,
     }
     if files_removed is not None:
         counts["files_removed"] = files_removed
@@ -156,7 +147,6 @@ async def preview_purge(db: AsyncSession) -> PurgeSummary:
     cutoffs = await _cutoffs(db)
     images = await _expired_inspection_images(db, cutoffs["inspections"])
     reports = await _expired_reports(db, cutoffs["reports"])
-    exports = await _expired_dataset_exports(db, cutoffs["exports"])
     detection_count, analyses = await _counts_for_images(db, [image.id for image in images])
 
     return _build_summary(
@@ -165,7 +155,6 @@ async def preview_purge(db: AsyncSession) -> PurgeSummary:
         detection_count=detection_count,
         analysis_count=len(analyses),
         report_count=len(reports),
-        export_count=len(exports),
     )
 
 
@@ -181,7 +170,6 @@ async def execute_purge(db: AsyncSession) -> PurgeSummary:
     cutoffs = await _cutoffs(db)
     images = await _expired_inspection_images(db, cutoffs["inspections"])
     reports = await _expired_reports(db, cutoffs["reports"])
-    exports = await _expired_dataset_exports(db, cutoffs["exports"])
     detection_count, analyses = await _counts_for_images(db, [image.id for image in images])
 
     files_removed = 0
@@ -210,17 +198,12 @@ async def execute_purge(db: AsyncSession) -> PurgeSummary:
         files_removed += _remove_derived_file(report.file_path, watch_root=watch_root)
         await db.delete(report)
 
-    for export in exports:
-        files_removed += _remove_derived_file(export.file_path, watch_root=watch_root)
-        await db.delete(export)
-
     summary = _build_summary(
         cutoffs,
         image_count=len(images),
         detection_count=detection_count,
         analysis_count=len(analyses),
         report_count=len(reports),
-        export_count=len(exports),
         files_removed=files_removed,
     )
 
