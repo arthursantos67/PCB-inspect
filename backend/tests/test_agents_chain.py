@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from app.agents.batch_context import BatchContext, DefectFrequency
 from app.agents.chain import run_chain
 from app.agents.errors import AgentChainAbortedError
 from app.models import Detection
@@ -245,3 +246,81 @@ async def test_run_chain_aborts_gracefully_when_llm_is_unreachable() -> None:
 
     with pytest.raises(AgentChainAbortedError, match="connection refused"):
         await run_chain(client, board_number="B1", batch_number="BATCH1", detections=[detection])
+
+
+# --- Batch frequency context and text hygiene -------------------------------------------------
+
+
+def _batch_context(occurrences: int, boards_affected: int) -> BatchContext:
+    return BatchContext(
+        batch_number="BATCH1",
+        boards_inspected=10,
+        boards_with_defects=boards_affected,
+        frequencies={
+            DefectType.SHORT: DefectFrequency(
+                occurrences=occurrences, boards_affected=boards_affected
+            )
+        },
+    )
+
+
+async def test_batch_frequency_reaches_every_agent_prompt() -> None:
+    """The Analyst, the Reviewer and the Summarizer all need the batch's frequency figures,
+    otherwise each board is reasoned about in isolation and the output reads the same for every
+    board with the same defect class.
+    """
+    detection = _detection()
+    client = _StubLLMClient(
+        [_analyst_response(detection.id), _approve_response(), _summary_response()]
+    )
+
+    await run_chain(
+        client,
+        board_number="B1",
+        batch_number="BATCH1",
+        detections=[detection],
+        batch_context=_batch_context(occurrences=7, boards_affected=6),
+    )
+
+    analyst_user, reviewer_user, summarizer_user = (user for _system, user in client.calls)
+    assert "batch_occurrences=7" in analyst_user
+    assert "7 occurrence(s) across 6 board(s)" in analyst_user
+    assert "batch_occurrences=7" in reviewer_user
+    assert "7 occurrence(s) across 6 board(s)" in summarizer_user
+
+
+async def test_prompts_omit_batch_frequency_when_the_board_has_no_batch() -> None:
+    detection = _detection()
+    client = _StubLLMClient(
+        [_analyst_response(detection.id), _approve_response(), _summary_response()]
+    )
+
+    await run_chain(client, board_number="B1", batch_number=None, detections=[detection])
+
+    analyst_user = client.calls[0][1]
+    assert "batch_occurrences" not in analyst_user
+    assert "occurrence(s) across" not in analyst_user
+
+
+async def test_agent_text_is_stripped_of_dashes() -> None:
+    """The operator reads this text verbatim and does not want em dashes in it, and a local
+    model writes them anyway however the prompt is worded.
+    """
+    detection = _detection()
+    analyst = _analyst_response(detection.id)
+    analyst["findings"][0]["description"] = "Short circuit — two pads bridged"
+    analyst["findings"][0]["probable_causes"] = ["excess paste — stencil aperture too large"]
+    analyst["findings"][0]["suggested_solutions"] = ["rework the joint — inspect neighbours"]
+    summary = _summary_response()
+    summary["executive_summary"] = "One high severity defect — rework recommended"
+    client = _StubLLMClient([analyst, _approve_response(), summary])
+
+    result = await run_chain(
+        client, board_number="B1", batch_number="BATCH1", detections=[detection]
+    )
+
+    finding = result.per_defect[0]
+    assert finding["description"] == "Short circuit, two pads bridged"
+    assert finding["probable_causes"] == ["excess paste, stencil aperture too large"]
+    assert finding["suggested_solutions"] == ["rework the joint, inspect neighbours"]
+    assert result.executive_summary == "One high severity defect, rework recommended"

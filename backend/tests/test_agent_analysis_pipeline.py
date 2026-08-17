@@ -306,7 +306,7 @@ def test_run_agent_analysis_falls_back_to_baseline_when_no_llm_client(
     """
     image_id = _run(_seed_analyzing_image_with_baseline())
 
-    async def _no_client(db: object) -> None:
+    async def _no_client(db: object, settings: object = None, *, role: str | None = None) -> None:
         return None
 
     monkeypatch.setattr(pipeline_module, "build_llm_client", _no_client)
@@ -333,7 +333,11 @@ def test_run_agent_analysis_falls_back_to_baseline_when_chain_aborts(
     """
     image_id = _run(_seed_analyzing_image_with_baseline())
 
-    async def _stub_client(db: object) -> object:
+    async def _stub_client(
+        db: object, settings: object = None, *, role: str | None = None
+    ) -> object:
+        # Pins the tier the chain runs on: `analysis`, never the shared default.
+        assert role == "analysis"
         return object()
 
     async def _raise_aborted(client: object, **kwargs: object) -> None:
@@ -359,7 +363,11 @@ def test_run_agent_analysis_swallows_unexpected_exceptions_and_falls_back(
 ) -> None:
     image_id = _run(_seed_analyzing_image_with_baseline())
 
-    async def _stub_client(db: object) -> object:
+    async def _stub_client(
+        db: object, settings: object = None, *, role: str | None = None
+    ) -> object:
+        # Pins the tier the chain runs on: `analysis`, never the shared default.
+        assert role == "analysis"
         return object()
 
     async def _raise_unexpected(client: object, **kwargs: object) -> None:
@@ -406,7 +414,11 @@ def test_run_agent_analysis_enriches_analysis_on_chain_success(
         duration_ms=42,
     )
 
-    async def _stub_client(db: object) -> object:
+    async def _stub_client(
+        db: object, settings: object = None, *, role: str | None = None
+    ) -> object:
+        # Pins the tier the chain runs on: `analysis`, never the shared default.
+        assert role == "analysis"
         return object()
 
     async def _fake_chain(client: object, **kwargs: object) -> AgentChainResult:
@@ -444,7 +456,9 @@ def test_run_agent_analysis_is_a_no_op_when_image_is_not_analyzing(
 
     called = False
 
-    async def _fail_if_called(db: object) -> None:
+    async def _fail_if_called(
+        db: object, settings: object = None, *, role: str | None = None
+    ) -> None:
         nonlocal called
         called = True
         raise AssertionError("must not be called when the image isn't ANALYZING")

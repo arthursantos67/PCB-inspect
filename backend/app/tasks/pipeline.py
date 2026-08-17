@@ -210,7 +210,7 @@ async def _run_agent_analysis_async(inspection_image_id: str) -> None:
         board_number, batch_number = await _load_board_context(db, image)
 
         fallback_reason: str | None = None
-        client = await build_llm_client(db)
+        client = await build_llm_client(db, role="analysis")
         if client is None:
             fallback_reason = "no LLM client configured for the current provider"
         else:

@@ -18,18 +18,45 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.agents.analyst import run_analyst
+from app.agents.batch_context import BatchContext
 from app.agents.errors import AgentChainAbortedError
 from app.agents.llm_client import LLMClient
 from app.agents.prompts.v1 import PROMPT_VERSION
 from app.agents.reviewer import run_reviewer
 from app.agents.schemas import AnalystFinding
 from app.agents.summarizer import run_summarizer
+from app.core.language import DEFAULT_LANGUAGE, Language
 from app.models import Detection
 from app.models.enums import DispositionRecommendation, Severity, severity_rank
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_REVIEW_ATTEMPTS = 2
+
+# The prompts already tell every agent not to write dashes, but a local model slips often
+# enough that the operator would still see them on the analysis
+# screen, so the text is normalized on the way to the database. A dash used as punctuation
+# becomes a comma; one used as a hyphen or range separator becomes a plain hyphen, which keeps
+# things like "0.85-0.90" readable.
+_DASHES = ("—", "–")
+
+
+def strip_dashes(text: str) -> str:
+    cleaned = text
+    for dash in _DASHES:
+        cleaned = cleaned.replace(f" {dash} ", ", ").replace(dash, "-")
+    return cleaned
+
+
+def _clean_finding(finding: AnalystFinding) -> AnalystFinding:
+    return finding.model_copy(
+        update={
+            "description": strip_dashes(finding.description),
+            "probable_causes": [strip_dashes(c) for c in finding.probable_causes],
+            "suggested_solutions": [strip_dashes(s) for s in finding.suggested_solutions],
+            "functional_impact": strip_dashes(finding.functional_impact),
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -43,6 +70,10 @@ class AgentChainResult:
     prompt_version: str
     tokens_used: int | None
     duration_ms: int
+    # Which language `per_defect`/`executive_summary` are written in, recorded on the
+    # `Analysis` row so a later report in the other language knows it has something to
+    # translate (issue #50).
+    language: Language = DEFAULT_LANGUAGE
 
 
 def _finding_to_dict(finding: AnalystFinding) -> dict[str, Any]:
@@ -77,6 +108,8 @@ async def _draft_until_approved(
     batch_number: str | None,
     detections: Sequence[Detection],
     max_review_attempts: int,
+    batch_context: BatchContext | None,
+    language: Language,
 ) -> list[AnalystFinding]:
     corrections: list[str] | None = None
     for attempt in range(1, max_review_attempts + 1):
@@ -86,10 +119,18 @@ async def _draft_until_approved(
             batch_number=batch_number,
             detections=detections,
             corrections=corrections,
+            batch_context=batch_context,
+            language=language,
         )
         _validate_coverage(draft.findings, detections)
 
-        review = await run_reviewer(client, detections=detections, draft_findings=draft.findings)
+        review = await run_reviewer(
+            client,
+            detections=detections,
+            draft_findings=draft.findings,
+            batch_context=batch_context,
+            language=language,
+        )
 
         if review.approved:
             findings = review.revised_findings or draft.findings
@@ -124,12 +165,21 @@ async def run_chain(
     batch_number: str | None,
     detections: Sequence[Detection],
     max_review_attempts: int = DEFAULT_MAX_REVIEW_ATTEMPTS,
+    batch_context: BatchContext | None = None,
+    language: Language = Language.EN,
 ) -> AgentChainResult:
     """Runs the full chain for one image's reportable detections.
 
     `max_review_attempts` bounds how many Analyst drafts get reviewed before giving up (must
     be >= 1) — `app.tasks.pipeline` passes the `agent_analysis_max_review_attempts` config
     value (issue #31) through here rather than hardcoding it.
+
+    `batch_context` (optional, absent for a board with no batch) carries how often each defect
+    class has already been seen in this board's batch, so the findings can distinguish an
+    isolated occurrence from a recurring one.
+
+    `language` is the station's language (issue #50) and is what every agent writes its prose
+    in; it travels back on the result so the caller can record it on the `Analysis` row.
     """
     if not detections:
         raise AgentChainAbortedError("run_chain called with no detections")
@@ -138,20 +188,29 @@ async def run_chain(
 
     started = time.monotonic()
 
-    final_findings = await _draft_until_approved(
+    approved_findings = await _draft_until_approved(
         client,
         board_number=board_number,
         batch_number=batch_number,
         detections=detections,
         max_review_attempts=max_review_attempts,
+        batch_context=batch_context,
+        language=language,
     )
     summary = await run_summarizer(
-        client, board_number=board_number, batch_number=batch_number, findings=final_findings
+        client,
+        board_number=board_number,
+        batch_number=batch_number,
+        findings=approved_findings,
+        batch_context=batch_context,
+        language=language,
     )
+    final_findings = [_clean_finding(f) for f in approved_findings]
 
     return AgentChainResult(
         per_defect=[_finding_to_dict(f) for f in final_findings],
-        executive_summary=summary.executive_summary,
+        executive_summary=strip_dashes(summary.executive_summary),
+        language=language,
         disposition_recommendation=summary.disposition_recommendation,
         severity_max=max(final_findings, key=lambda f: severity_rank(f.severity)).severity,
         llm_provider=getattr(client, "provider", "unknown"),
