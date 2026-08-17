@@ -111,6 +111,15 @@ class Settings(BaseSettings):
         """
         return self.app_data_dir / "golden-set"
 
+    @property
+    def uploaded_weights_dir(self) -> Path:
+        """Where weight files uploaded from Settings > Models are stored (FR-12). Under
+        app-data because that is the one volume the API and the workers share read-write —
+        `/weights` is a read-only bind mount of the repo's own `weights/` directory, and the
+        file has to outlive whatever folder the operator downloaded it into.
+        """
+        return self.app_data_dir / "weights"
+
 
 @lru_cache
 def get_settings() -> Settings:

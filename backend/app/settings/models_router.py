@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -31,18 +31,55 @@ async def list_models(
 async def register_model(
     payload: ModelVersionRegisterRequest,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ModelVersionOut:
     """Registers a new weights version and always triggers the golden-set evaluation (FR-12) —
     the payload has no `metrics` field, so there is no way to set them except that evaluation
     actually running (RN-10).
     """
     model_version = await models_service.register_model_version(
-        db, version=payload.version, weights_path=payload.weights_path
+        db,
+        actor_id=current_user.id,
+        version=models_service.validate_version_string(payload.version),
+        weights_path=payload.weights_path,
     )
     # Enqueued after commit (mirrors app.ingestion.service's enqueue-after-commit pattern,
     # section 3.5) and offloaded to a thread so the blocking Redis call never stalls the
     # event loop.
+    await asyncio.to_thread(run_model_evaluation.delay, str(model_version.id))
+    return ModelVersionOut.model_validate(model_version)
+
+
+@router.post("/upload", response_model=ModelVersionOut, status_code=status.HTTP_201_CREATED)
+async def upload_model_weights(
+    version: str = Form(...),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ModelVersionOut:
+    """Swaps the model by uploading the `.pt` file the training notebook produced: the file is
+    stored under the managed weights directory and then registered exactly like a local path,
+    so it goes through the same golden-set
+    evaluation and the same activation gate (FR-12, NFR-05). Uploading never activates
+    anything on its own — the operator still activates the version once its metrics are in.
+    """
+    version = models_service.validate_version_string(version)
+    await models_service.ensure_version_available(db, version)
+
+    weights_path = await models_service.store_uploaded_weights(version, file)
+    try:
+        model_version = await models_service.register_model_version(
+            db,
+            actor_id=current_user.id,
+            version=version,
+            weights_path=str(weights_path),
+            upload=True,
+        )
+    except Exception:
+        # Nothing points at the stored file if the row was never created.
+        await models_service.discard_uploaded_weights(weights_path)
+        raise
+
     await asyncio.to_thread(run_model_evaluation.delay, str(model_version.id))
     return ModelVersionOut.model_validate(model_version)
 

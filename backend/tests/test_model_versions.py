@@ -11,9 +11,10 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models import AuditLog, ModelVersion
 from app.models.enums import ModelEvaluationStatus
-from app.settings import models_router
+from app.settings import models_router, models_service
 
 ACCOUNT = {
     "email": "operator@pcb-inspect.local",
@@ -200,6 +201,134 @@ async def test_get_evaluation_reflects_current_status(
     body = response.json()
     assert body["evaluation_status"] == "COMPLETED"
     assert body["metrics"]["map50"] == 0.97
+
+
+# --- Upload (FR-12) -----------------------------------------------------------------------
+
+# What a checkpoint saved by a current `torch.save` starts with: it is a ZIP archive.
+_TORCH_CHECKPOINT_BYTES = b"PK\x03\x04" + b"\x00" * 64
+
+
+@pytest.fixture
+def weights_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Points uploads at the test's own directory instead of the real app-data volume."""
+    settings = get_settings().model_copy(update={"app_data_dir": tmp_path / "app-data"})
+    monkeypatch.setattr(models_service, "get_settings", lambda: settings)
+    return settings.uploaded_weights_dir
+
+
+async def _upload(
+    client: AsyncClient,
+    token: str,
+    *,
+    version: str,
+    content: bytes,
+    filename: str = "best.pt",
+) -> object:
+    return await client.post(
+        "/api/v1/settings/models/upload",
+        data={"version": version},
+        files={"file": (filename, content, "application/octet-stream")},
+        headers=_auth_headers(token),
+    )
+
+
+async def test_upload_stores_the_weights_and_registers_a_pending_version(
+    client: AsyncClient,
+    weights_dir: Path,
+    db_session: AsyncSession,
+    _stub_tasks: dict[str, _FakeTask],
+) -> None:
+    """The uploaded file is copied into managed storage (the operator's download folder isn't
+    durable) and then goes through the exact same gate as a path registration: PENDING, no
+    metrics, evaluation enqueued, nothing activated.
+    """
+    token = await _setup_account(client)
+
+    response = await _upload(client, token, version="up-1", content=_TORCH_CHECKPOINT_BYTES)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["evaluation_status"] == "PENDING"
+    assert body["metrics"] is None
+    assert body["is_active"] is False
+    assert body["weights_path"] == str(weights_dir / "up-1.pt")
+    assert (weights_dir / "up-1.pt").read_bytes() == _TORCH_CHECKPOINT_BYTES
+    assert _stub_tasks["evaluation"].calls == [(body["id"],)]
+
+    audit = await db_session.scalar(
+        select(AuditLog).where(AuditLog.action == "model.registered")
+    )
+    assert audit is not None
+    assert audit.payload["source"] == "upload"
+
+
+async def test_upload_rejects_a_file_that_is_not_a_torch_checkpoint(
+    client: AsyncClient, weights_dir: Path, db_session: AsyncSession
+) -> None:
+    """Read from the file's own header, not its extension — same rule ingestion applies to
+    images. A rejected upload must leave neither a row nor a half-written file behind.
+    """
+    token = await _setup_account(client)
+
+    response = await _upload(
+        client, token, version="up-2", content=b"this is a jpeg someone renamed"
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_FAILED"
+    assert (await db_session.scalar(select(func.count()).select_from(ModelVersion))) == 0
+    assert list(weights_dir.glob("*")) == []
+
+
+async def test_upload_rejects_an_empty_file(
+    client: AsyncClient, weights_dir: Path, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+
+    response = await _upload(client, token, version="up-3", content=b"")
+
+    assert response.status_code == 422
+    assert (await db_session.scalar(select(func.count()).select_from(ModelVersion))) == 0
+    assert list(weights_dir.glob("*")) == []
+
+
+async def test_upload_rejects_a_version_name_already_registered(
+    client: AsyncClient, tmp_path: Path, weights_dir: Path
+) -> None:
+    """Checked before a single byte is written, so a duplicate upload can never overwrite the
+    weights an existing version points at.
+    """
+    token = await _setup_account(client)
+    await client.post(
+        "/api/v1/settings/models",
+        json={"version": "up-4", "weights_path": str(_weights_file(tmp_path))},
+        headers=_auth_headers(token),
+    )
+
+    response = await _upload(client, token, version="up-4", content=_TORCH_CHECKPOINT_BYTES)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "MODEL_VERSION_EXISTS"
+    assert list(weights_dir.glob("*")) == []
+
+
+async def test_upload_rejects_a_version_name_that_is_not_a_safe_file_name(
+    client: AsyncClient, weights_dir: Path, db_session: AsyncSession
+) -> None:
+    """The version string becomes the stored file's name, so it must not be able to walk out
+    of the weights directory.
+    """
+    token = await _setup_account(client)
+
+    response = await _upload(
+        client, token, version="../../etc/passwd", content=_TORCH_CHECKPOINT_BYTES
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_FAILED"
+    assert (await db_session.scalar(select(func.count()).select_from(ModelVersion))) == 0
+    assert list(weights_dir.glob("*")) == []
 
 
 # --- Activation gate (FR-12, NFR-05) -------------------------------------------------------
