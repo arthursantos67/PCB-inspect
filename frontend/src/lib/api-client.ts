@@ -194,6 +194,22 @@ export async function getConfig(): Promise<ConfigResponse> {
   return apiFetch("/api/v1/settings/config");
 }
 
+export type DirectoryEntry = { name: string; path: string };
+
+export type DirectoryListing = {
+  path: string;
+  parent: string | null;
+  directories: DirectoryEntry[];
+};
+
+/** Lists subdirectories of a host folder for the watch-root folder picker; omit `path` to start
+ * at the browsable root.
+ */
+export async function browseDirectories(path?: string): Promise<DirectoryListing> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  return apiFetch(`/api/v1/settings/browse${query}`);
+}
+
 export async function updateConfig(config: Record<string, unknown>): Promise<ConfigResponse> {
   return apiFetch("/api/v1/settings/config", {
     method: "PATCH",

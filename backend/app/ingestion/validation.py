@@ -31,10 +31,6 @@ def sha256_checksum(path: Path) -> str:
     return digest.hexdigest()
 
 
-def sha256_checksum_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def read_image_metadata(path: Path) -> ImageMetadata:
     """Identifies the format from the file's own header (magic bytes) and its dimensions.
 

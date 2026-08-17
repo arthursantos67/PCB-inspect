@@ -35,16 +35,6 @@ def _positive_int(key: str, value: Any) -> int:
     return number
 
 
-def _positive_number(key: str, value: Any) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        raise ApiError("CONFIG_INVALID_VALUE", f"{key} must be a number", 422) from None
-    if number <= 0:
-        raise ApiError("CONFIG_INVALID_VALUE", f"{key} must be a positive number", 422)
-    return number
-
-
 def _bool(key: str, value: Any) -> bool:
     if not isinstance(value, bool):
         raise ApiError("CONFIG_INVALID_VALUE", f"{key} must be true or false", 422)
@@ -142,7 +132,6 @@ _VALIDATORS: dict[str, Callable[[str, Any], Any]] = {
         k, v, ("subdirectory_batch_filename_board",)
     ),
     "watch_mode_enabled": _bool,
-    "import_max_size_mb": _positive_number,
     # Retention (FR-17) and the reports output directory (FR-11). The `_reports` override is
     # optional — unset (None/"") falls back to `retention_days` (`app.retention.service`), for
     # operators who want a shorter window on generated reports than on inspection data itself.

@@ -27,13 +27,6 @@ class ScanSummary(BaseModel):
     files: list[FileResult]
 
 
-class ImportSummary(BaseModel):
-    ingested: int
-    duplicate: int
-    failed: int
-    files: list[FileResult]
-
-
 WatchStatus = Literal["watching", "paused", "not_configured", "error"]
 
 

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.service import record_audit
 from app.core.config import get_settings
+from app.core.host_paths import to_container_path
 from app.models import Analysis, ChatSession, Detection, InspectionImage, Report
 from app.settings.service import get_config_value
 
@@ -51,7 +52,9 @@ async def _watch_root(db: AsyncSession) -> Path:
     configured = await get_config_value(
         db, "watch_root_path", default=str(get_settings().watch_root)
     )
-    return Path(configured).resolve()
+    # Translated to the container's view, because that's the form the paths this guards against
+    # deleting are stored in (`InspectionImage.original_path`).
+    return to_container_path(configured).resolve()
 
 
 async def _cutoffs(db: AsyncSession) -> dict[str, datetime]:
