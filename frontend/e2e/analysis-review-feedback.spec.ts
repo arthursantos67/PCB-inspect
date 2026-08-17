@@ -108,7 +108,9 @@ test("validates an analysis, gives detection feedback, sets disposition, and man
 
   await expect(detectionsList.getByText("Spurious copper")).toBeVisible();
   await expect(detectionsList.getByText("Manual", { exact: true })).toBeVisible();
-  await expect(detectionsList.getByText("Manually annotated")).toBeVisible();
+  // Manual detections show "drawn by hand" in place of a confidence percentage
+  // (DetectionsPanel.tsx); there's no separate "Manually annotated" text.
+  await expect(detectionsList.getByText("drawn by hand")).toBeVisible();
 
   await assertNoA11yViolations(page, "Inspection detail (after review/annotation)");
 });
