@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.core.errors import ApiError
+from app.core.language import Language
 from app.models.enums import DefectType, Severity
 
 
@@ -82,6 +83,9 @@ _SEVERITY_VALUES = tuple(member.value for member in Severity)
 # Every value FR-13 requires the operator to be able to read/write, plus the ingestion keys
 # already in use since issue #4 — no key outside this set is accepted by `update_config`.
 _VALIDATORS: dict[str, Callable[[str, Any], Any]] = {
+    # Station language (issue #50). One setting for the whole station: the screens read it,
+    # generated reports default to it, and the agent worker writes its analysis prose in it.
+    "ui_language": lambda k, v: _enum(k, v, tuple(member.value for member in Language)),
     # Confidence thresholds (RV-03)
     "min_confidence_store": lambda k, v: _range(k, v, 0, 1),
     "min_confidence_report": lambda k, v: _range(k, v, 0, 1),

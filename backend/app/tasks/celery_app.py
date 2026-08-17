@@ -15,6 +15,7 @@ celery_app = Celery(
         "app.tasks.ingestion",
         "app.tasks.models",
         "app.tasks.reports",
+        "app.tasks.translation",
     ],
 )
 
@@ -34,6 +35,8 @@ celery_app.conf.update(
     task_routes={
         "app.tasks.pipeline.run_inference": {"queue": "inference"},
         "app.tasks.pipeline.run_agent_analysis": {"queue": "agents"},
+        # Shares the agents queue because it shares the LLM — see the module docstring.
+        "app.tasks.translation.translate_analysis": {"queue": "agents"},
         "app.tasks.ingestion.poll_watch_root": {"queue": "housekeeping"},
         "app.tasks.alert_monitor.evaluate_thresholds": {"queue": "housekeeping"},
         "app.tasks.retention.purge_expired": {"queue": "housekeeping"},

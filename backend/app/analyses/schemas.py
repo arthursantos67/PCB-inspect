@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator
 
+from app.core.language import DEFAULT_LANGUAGE, Language, coerce_language
 from app.models.enums import (
     AnalysisReviewAction,
     AnalysisReviewStatus,
@@ -60,3 +62,7 @@ class AnalysisOut(BaseModel):
     review_status: AnalysisReviewStatus
     reviews: list[AnalysisReviewOut] = []
     created_at: datetime
+    # Which language the prose above is actually in (issue #50). Usually the station's, but a
+    # board analysed before the language was switched stays in the old one until a translation
+    # is cached, and the screen tells the operator rather than pretending.
+    language: Annotated[Language, BeforeValidator(coerce_language)] = DEFAULT_LANGUAGE

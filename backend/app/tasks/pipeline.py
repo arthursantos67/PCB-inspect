@@ -7,6 +7,7 @@ from celery.signals import worker_ready
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.batch_context import load_batch_context
 from app.agents.chain import run_chain
 from app.agents.errors import AgentChainAbortedError
 from app.agents.llm_client import build_llm_client
@@ -19,6 +20,7 @@ from app.inference.service import process_image
 from app.inspections.state import transition
 from app.models import Analysis, Batch, Board, Detection, InspectionImage
 from app.models.enums import AnalysisSource, ImageStatus
+from app.settings import service as settings_service
 from app.stats.cache import invalidate_all as invalidate_stats_cache
 from app.tasks.base import PipelineTask
 from app.tasks.celery_app import celery_app
@@ -99,7 +101,11 @@ async def _run_inference_async(inspection_image_id: str) -> None:
             )
             transition_to = ImageStatus.ANALYZING if should_run_agents else ImageStatus.COMPLETED
             analysis = await create_baseline_analysis(
-                db, image, reportable_detections, transition_to=transition_to
+                db,
+                image,
+                reportable_detections,
+                transition_to=transition_to,
+                language=await settings_service.get_language(db),
             )
         await db.commit()
 
@@ -208,9 +214,10 @@ async def _run_agent_analysis_async(inspection_image_id: str) -> None:
             .all()
         )
         board_number, batch_number = await _load_board_context(db, image)
+        batch_context = await load_batch_context(db, image)
 
         fallback_reason: str | None = None
-        client = await build_llm_client(db)
+        client = await build_llm_client(db, role="analysis")
         if client is None:
             fallback_reason = "no LLM client configured for the current provider"
         else:
@@ -222,6 +229,8 @@ async def _run_agent_analysis_async(inspection_image_id: str) -> None:
                     batch_number=batch_number,
                     detections=detections,
                     max_review_attempts=policy_config.max_review_attempts,
+                    batch_context=batch_context,
+                    language=await settings_service.get_language(db),
                 )
             except AgentChainAbortedError as exc:
                 fallback_reason = str(exc)
@@ -239,6 +248,10 @@ async def _run_agent_analysis_async(inspection_image_id: str) -> None:
                 analysis.prompt_version = result.prompt_version
                 analysis.tokens_used = result.tokens_used
                 analysis.duration_ms = result.duration_ms
+                # The agent prose replaces the baseline's, so whatever was cached as a
+                # translation of the baseline no longer describes this analysis (issue #50).
+                analysis.language = result.language.value
+                analysis.translations = None
 
         if fallback_reason is not None:
             logger.warning(

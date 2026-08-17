@@ -17,8 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.service import record_audit
 from app.core.errors import ApiError
+from app.core.language import DEFAULT_LANGUAGE, Language
 from app.inspections.state import transition
-from app.knowledge.defects import DEFECT_KNOWLEDGE_BASE
+from app.knowledge.defects import DEFECT_KNOWLEDGE_BASE, knowledge_base
 from app.models import Analysis, AnalysisReview, Detection, InspectionImage
 from app.models.enums import (
     AnalysisReviewAction,
@@ -48,6 +49,7 @@ async def create_baseline_analysis(
     reportable_detections: Sequence[Detection],
     *,
     transition_to: ImageStatus = ImageStatus.COMPLETED,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> Analysis:
     """Creates the 1:1 `Analysis` (RN-03) for `image` from the static knowledge base.
     `reportable_detections` must be non-empty (the no-defect path, FR-05, never reaches
@@ -57,10 +59,16 @@ async def create_baseline_analysis(
     since no agent chain runs. The pipeline (`app.tasks.pipeline`) passes `ANALYZING` instead
     when the `agent_analysis_mode` policy (issue #31) decides the Analyst/Reviewer/Summarizer
     chain should run next, so the image doesn't prematurely land on a terminal status.
+
+    `language` is the station's language (issue #50), recorded on the row so a report in the
+    other language knows what it is looking at. A baseline analysis is never machine
+    translated, though: its text is the curated catalogue verbatim, so
+    `app.analyses.localization` rebuilds it from the other language's catalogue instead.
     """
+    catalog = knowledge_base(language)
     per_defect = []
     for detection in reportable_detections:
-        entry = DEFECT_KNOWLEDGE_BASE[detection.defect_type]
+        entry = catalog[detection.defect_type]
         per_defect.append(
             {
                 "detection_id": str(detection.id),
@@ -77,6 +85,7 @@ async def create_baseline_analysis(
         source=AnalysisSource.KNOWLEDGE_BASE,
         per_defect=per_defect,
         severity_max=compute_severity_max(reportable_detections),
+        language=language.value,
     )
     db.add(analysis)
     transition(image, transition_to)
