@@ -1,14 +1,15 @@
-"""Response shapes for `GET /api/v1/stats/{summary,trends,by-defect-type}` (FR-08, PRD
-section 11.2) — dashboard aggregates (FE-02). Every count here is derived exclusively from
-`COMPLETED` images and `is_reported=true` detections (RN-07).
+"""Response shapes for `GET /api/v1/stats/{summary,trends,by-defect-type,recent-batches}`
+(FR-08, PRD section 11.2) — dashboard aggregates (FE-02). Every count here is derived
+exclusively from `COMPLETED` images and `is_reported=true` detections (RN-07).
 """
 
-from datetime import date
+import uuid
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel
 
-from app.models.enums import DefectType
+from app.models.enums import DefectType, ImageStatus, Severity
 
 Period = Literal["7d", "30d", "90d"]
 Granularity = Literal["day", "week", "month"]
@@ -58,3 +59,23 @@ class StatsTrends(BaseModel):
     period: Period
     granularity: Granularity
     points: list[TrendPoint]
+
+
+class RecentBatch(BaseModel):
+    """One row of `GET /api/v1/stats/recent-batches` — backs the dashboard's "Recently
+    analyzed batches" card. `severity` is `None` until the batch has
+    at least one reported defect (mirrors `InspectionListItem.severity_max`); `status` is the
+    single worst-in-progress `ImageStatus` across the batch's images (see
+    `app.stats.service.compute_recent_batches`).
+    """
+
+    batch_id: uuid.UUID
+    batch_number: str
+    defect_count: int
+    severity: Severity | None
+    status: ImageStatus
+    created_at: datetime
+
+
+class RecentBatches(BaseModel):
+    results: list[RecentBatch]

@@ -14,7 +14,14 @@ from app.db.session import get_db
 from app.models import User
 from app.stats import service
 from app.stats.cache import get_cached, set_cached
-from app.stats.schemas import Granularity, Period, StatsByDefectType, StatsSummary, StatsTrends
+from app.stats.schemas import (
+    Granularity,
+    Period,
+    RecentBatches,
+    StatsByDefectType,
+    StatsSummary,
+    StatsTrends,
+)
 
 router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
 
@@ -73,5 +80,23 @@ async def get_by_defect_type(
         return StatsByDefectType.model_validate(cached)
 
     result = await service.compute_by_defect_type(db)
+    await set_cached(cache_key, result.model_dump(mode="json"))
+    return result
+
+
+@router.get("/recent-batches", response_model=RecentBatches)
+async def get_recent_batches(
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+) -> RecentBatches:
+    """Backs the dashboard's "Recently analyzed batches" card."""
+    cache_key = _cache_key("recent_batches", str(limit))
+
+    cached = await get_cached(cache_key)
+    if cached is not None:
+        return RecentBatches.model_validate(cached)
+
+    result = RecentBatches(results=await service.compute_recent_batches(db, limit=limit))
     await set_cached(cache_key, result.model_dump(mode="json"))
     return result
