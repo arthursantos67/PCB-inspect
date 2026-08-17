@@ -42,9 +42,15 @@ test("ingests a board, processes it, and renders the completed analysis", async 
   await page.getByRole("button", { name: "Scan directory now" }).click();
   await expect(page.getByText("Discovered 1 · Ingested 1 · Duplicate 0 · Failed 0 · Skipped 0")).toBeVisible();
 
-  // --- Open the ingested board from the dashboard's recent-analyses table (UC-5) ---
+  // --- Open the ingested board from the dashboard (UC-5). Both the dashboard table and the
+  // inspections screen are batch-first, so the path is
+  // batch row -> that batch's boards -> the board ---
   await page.getByRole("link", { name: "Dashboard" }).click();
   await expect(page).toHaveURL("/");
+  const batchRow = page.getByRole("row", { name: new RegExp(batchNumber) });
+  await expect(batchRow).toBeVisible({ timeout: 30_000 });
+  await batchRow.click();
+  await expect(page).toHaveURL(new RegExp(`batch_number=${batchNumber}`));
   const row = page.getByRole("row", { name: new RegExp(boardNumber) });
   await expect(row).toBeVisible({ timeout: 30_000 });
   await row.getByRole("link", { name: boardNumber }).click();

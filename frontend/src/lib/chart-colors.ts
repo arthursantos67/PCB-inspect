@@ -19,16 +19,12 @@ export const DEFECT_TYPES: readonly DefectType[] = [
   "spurious_copper",
 ];
 
-export const DEFECT_TYPE_LABEL: Record<DefectType, string> = {
-  missing_hole: "Missing hole",
-  mouse_bite: "Mouse bite",
-  open_circuit: "Open circuit",
-  short: "Short",
-  spur: "Spur",
-  spurious_copper: "Spurious copper",
-};
+// Class and severity names live in the i18n dictionaries (`defect.*`, `severity.*`), not here:
+// this module is the color contract, and a second copy of the words would go stale the moment
+// one of them is reworded.
 
 // Slot order fixed to the categorical palette's CVD-safe ordering (see globals.css --series-N).
+// Green is excluded from this palette on purpose — it's reserved for the status-good state.
 export const DEFECT_TYPE_COLOR: Record<DefectType, string> = {
   missing_hole: "var(--series-1)",
   mouse_bite: "var(--series-2)",
@@ -41,13 +37,6 @@ export const DEFECT_TYPE_COLOR: Record<DefectType, string> = {
 export type Severity = "low" | "medium" | "high" | "critical";
 
 export const SEVERITIES: readonly Severity[] = ["low", "medium", "high", "critical"];
-
-export const SEVERITY_LABEL: Record<Severity, string> = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  critical: "Critical",
-};
 
 // Severity is a state, not an identity, so it draws from the reserved status palette
 // (never the categorical series colors) — low->good ... critical->critical.

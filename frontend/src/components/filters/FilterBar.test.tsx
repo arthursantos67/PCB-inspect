@@ -69,7 +69,7 @@ describe("FilterBar", () => {
     fireEvent.change(screen.getByLabelText("Review status"), { target: { value: "VALIDATED" } });
     expect(onChange).toHaveBeenCalledWith({ ...EMPTY_INSPECTION_FILTERS, review_status: "VALIDATED" });
 
-    fireEvent.change(screen.getByLabelText("Disposition"), { target: { value: "rework" } });
+    fireEvent.change(screen.getByLabelText("Board decision"), { target: { value: "rework" } });
     expect(onChange).toHaveBeenCalledWith({ ...EMPTY_INSPECTION_FILTERS, disposition: "rework" });
   });
 

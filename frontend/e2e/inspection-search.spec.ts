@@ -44,10 +44,18 @@ test("filters the inspections list, combined and alone, with shareable URL state
   await expect(page).toHaveURL("/inspections");
   await assertNoA11yViolations(page, "Inspections search/history");
 
+  // --- The screen starts at the batch level: both ingested
+  // batches are listed, and opening one drills into that batch's boards alone ---
+  const batchRowA = page.getByRole("row", { name: new RegExp(`BATCH-A-${suffix}`) });
+  await expect(batchRowA).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("row", { name: new RegExp(`BATCH-B-${suffix}`) })).toBeVisible();
+
   const rowA = page.getByRole("row", { name: new RegExp(boardA) });
   const rowB = page.getByRole("row", { name: new RegExp(boardB) });
+  await batchRowA.getByRole("link", { name: `BATCH-A-${suffix}` }).click();
+  await expect(page).toHaveURL(new RegExp(`batch_number=BATCH-A-${suffix}`));
   await expect(rowA).toBeVisible({ timeout: 30_000 });
-  await expect(rowB).toBeVisible();
+  await expect(rowB).toHaveCount(0);
 
   // --- Board filter alone narrows to a single result and updates the URL (shareable) ---
   await page.getByLabel("Board").fill(boardA);
@@ -64,7 +72,7 @@ test("filters the inspections list, combined and alone, with shareable URL state
   // --- Swapping to a defect type that was never detected empties the combined result ---
   await page.getByRole("checkbox", { name: "Short" }).click();
   await page.getByRole("checkbox", { name: "Missing hole" }).click();
-  await expect(page.getByText("No inspections match these filters.")).toBeVisible();
+  await expect(page.getByText("No boards match these filters.")).toBeVisible();
 
   // --- A hard reload survives without a fresh login (session persisted to localStorage,
   // FE-01/section 13 — only an explicit logout ends it) and the filtered URL itself must
@@ -74,15 +82,17 @@ test("filters the inspections list, combined and alone, with shareable URL state
   await expect(page).toHaveURL(filteredUrl);
   await expect(page.getByLabel("Board")).toHaveValue(boardA);
   await expect(page.getByRole("checkbox", { name: "Missing hole" })).toBeChecked();
-  await expect(page.getByText("No inspections match these filters.")).toBeVisible();
+  await expect(page.getByText("No boards match these filters.")).toBeVisible();
 
-  // --- Clearing filters restores the full result set ---
+  // --- Clearing filters drops the batch too, so the screen returns to the batch list ---
   await page.getByRole("button", { name: "Clear filters" }).click();
   await expect(page).toHaveURL("/inspections");
-  await expect(rowA).toBeVisible();
-  await expect(rowB).toBeVisible();
+  await expect(batchRowA).toBeVisible();
+  await expect(page.getByRole("row", { name: new RegExp(`BATCH-B-${suffix}`) })).toBeVisible();
 
   // --- Selecting a result opens the existing analysis detail screen (Issue 10) ---
+  await batchRowA.getByRole("link", { name: `BATCH-A-${suffix}` }).click();
+  await expect(rowA).toBeVisible({ timeout: 30_000 });
   await rowA.getByRole("link", { name: boardA }).click();
   await expect(page).toHaveURL(/\/inspections\/.+/);
   await expect(page.getByText(`Board ${boardA}`)).toBeVisible();

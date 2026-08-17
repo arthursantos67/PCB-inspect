@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { LampChip, type LampTone } from "@/components/ui/lamp-chip";
 import {
   Table,
   TableBody,
@@ -15,35 +16,34 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useI18n } from "@/contexts/I18nContext";
 import {
   activateModelVersion,
   ApiError,
   listModelVersions,
-  registerModelVersion,
+  uploadModelWeights,
   type ModelEvaluationStatus,
   type ModelVersion,
 } from "@/lib/api-client";
-import { DEFECT_TYPE_LABEL, type DefectType } from "@/lib/chart-colors";
+import { DEFECT_TYPES, type DefectType } from "@/lib/chart-colors";
+import { formatTimestamp } from "@/lib/format";
 
 // Mirrors app.settings.models_service.MAP50_FLOOR (NFR-05) — display-only; the backend is
 // the source of truth and enforces this regardless of what the client shows.
 const MAP50_FLOOR = 0.95;
 
-const STATUS_LABEL: Record<ModelEvaluationStatus, string> = {
-  PENDING: "Evaluation pending",
-  RUNNING: "Evaluating…",
-  COMPLETED: "Evaluated",
-  FAILED: "Evaluation failed",
-};
-
-const STATUS_VARIANT: Record<
+/** Evaluation is a job with a lifecycle, so it wears the same lamp as every other job state
+ * in the app: unlit while queued, pulsing while it runs, green when it clears, red when it
+ * does not.
+ */
+const STATUS_LAMP: Record<
   ModelEvaluationStatus,
-  "default" | "secondary" | "destructive" | "outline"
+  { tone: LampTone; pulse?: boolean; hollow?: boolean }
 > = {
-  PENDING: "outline",
-  RUNNING: "secondary",
-  COMPLETED: "default",
-  FAILED: "destructive",
+  PENDING: { tone: "neutral", hollow: true },
+  RUNNING: { tone: "neutral", pulse: true },
+  COMPLETED: { tone: "good" },
+  FAILED: { tone: "critical" },
 };
 
 function formatPercent(value: number): string {
@@ -57,6 +57,7 @@ function ActivateControl({
   modelVersion: ModelVersion;
   onActivated: () => void;
 }) {
+  const { t } = useI18n();
   const [overriding, setOverriding] = useState(false);
   const [justification, setJustification] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -79,36 +80,35 @@ function ActivateControl({
       if (err instanceof ApiError && err.code === "MODEL_ACTIVATION_FAILED" && belowFloor) {
         setOverriding(true);
       }
-      setError(err instanceof ApiError ? err.message : "Failed to activate this version.");
+      setError(err instanceof ApiError ? err.message : t("models.activateFailed"));
     } finally {
       setBusy(false);
     }
   }
 
   if (modelVersion.is_active) {
-    return <Badge>Active</Badge>;
+    return <LampChip tone="good">{t("models.inProduction")}</LampChip>;
   }
 
   if (modelVersion.evaluation_status !== "COMPLETED") {
-    return <span className="text-xs text-muted-foreground">Waiting on evaluation</span>;
+    return <span className="text-xs text-muted-foreground">{t("models.waitingEvaluation")}</span>;
   }
 
   return (
     <div className="flex flex-col items-start gap-2">
       {!overriding && (
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => void activate(false)}>
-          Activate
+        <Button size="sm" variant="brand" disabled={busy} onClick={() => void activate(false)}>
+          {t("models.activate")}
         </Button>
       )}
       {overriding && (
         <div className="flex w-full max-w-xs flex-col gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2">
           <p className="text-xs text-destructive">
-            mAP@50 is below the {formatPercent(MAP50_FLOOR)} floor (NFR-05). Activating anyway
-            requires a justification and is recorded in the audit trail (FR-16).
+            {t("models.overrideWarning", { floor: formatPercent(MAP50_FLOOR) })}
           </p>
           <textarea
             className="min-h-16 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            placeholder="Why activate below the floor?"
+            placeholder={t("models.overridePlaceholder")}
             value={justification}
             onChange={(event) => setJustification(event.target.value)}
           />
@@ -119,10 +119,10 @@ function ActivateControl({
               disabled={busy || !justification.trim()}
               onClick={() => void activate(true)}
             >
-              Activate with override
+              {t("models.activateOverride")}
             </Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => setOverriding(false)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
           </div>
         </div>
@@ -133,6 +133,7 @@ function ActivateControl({
 }
 
 function MetricsCell({ modelVersion }: { modelVersion: ModelVersion }) {
+  const { t } = useI18n();
   if (!modelVersion.metrics) return <span className="text-muted-foreground">—</span>;
   const { map50, map50_95, per_class } = modelVersion.metrics;
 
@@ -144,7 +145,12 @@ function MetricsCell({ modelVersion }: { modelVersion: ModelVersion }) {
       <ul className="mt-1 flex flex-col gap-0.5 text-muted-foreground">
         {Object.entries(per_class).map(([defectType, ap]) => (
           <li key={defectType}>
-            {DEFECT_TYPE_LABEL[defectType as DefectType] ?? defectType}: {formatPercent(ap)}
+            {/* A per-class key the model reports but this build doesn't know shows raw,
+                rather than as a missing-translation key. */}
+            {DEFECT_TYPES.includes(defectType as DefectType)
+              ? t(`defect.${defectType as DefectType}`)
+              : defectType}
+            : {formatPercent(ap)}
           </li>
         ))}
       </ul>
@@ -152,21 +158,130 @@ function MetricsCell({ modelVersion }: { modelVersion: ModelVersion }) {
   );
 }
 
+/** Derives a first-guess version name from the uploaded file's name, so the common case
+ * (`best.pt` straight out of the notebook, or `pcb-v2.pt`) needs no typing at all. `best` is
+ * everyone's filename and says nothing, so it becomes a dated name instead of a collision.
+ */
+function suggestVersionName(fileName: string): string {
+  const stem = fileName.replace(/\.pt$/i, "").replace(/[^A-Za-z0-9._-]+/g, "-");
+  const today = new Date().toISOString().slice(0, 10);
+  if (!stem || /^best$/i.test(stem)) return `best-${today}`;
+  return stem;
+}
+
+function UploadWeightsCard({ onUploaded }: { onUploaded: () => void }) {
+  const { t } = useI18n();
+  const [version, setVersion] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploaded, setUploaded] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleFileChange(selected: File | null) {
+    setFile(selected);
+    setUploaded(null);
+    setError(null);
+    if (selected && !version.trim()) setVersion(suggestVersionName(selected.name));
+  }
+
+  async function handleUpload() {
+    if (!file) return;
+    setError(null);
+    setUploaded(null);
+    setUploading(true);
+    try {
+      const created = await uploadModelWeights({ version: version.trim(), file });
+      setVersion("");
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setUploaded(created.version);
+      onUploaded();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t("models.upload.failed"));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("models.upload.title")}</CardTitle>
+        <CardDescription>
+          {t("models.upload.descriptionStart")}
+          <code>best.pt</code>
+          {t("models.upload.descriptionRest")}
+          <Link className="underline" href="/model">
+            {t("models.upload.descriptionLink")}
+          </Link>
+          {t("models.upload.descriptionEnd")}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="grid max-w-xl grid-cols-2 gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="model-weights-file">{t("models.upload.file")}</Label>
+            <Input
+              id="model-weights-file"
+              ref={fileInputRef}
+              type="file"
+              accept=".pt"
+              // The native file button renders as bare text next to a styled text field, which
+              // reads as a broken control. Dressed as the outline button it actually is.
+              className="text-xs file:mr-3 file:h-7 file:rounded-[5px] file:border file:border-border-strong file:bg-card file:px-2.5 file:text-xs file:font-medium file:text-foreground"
+              onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="model-version">{t("models.upload.version")}</Label>
+            <Input
+              id="model-version"
+              placeholder="v1.1.0"
+              value={version}
+              onChange={(event) => setVersion(event.target.value)}
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="brand"
+            size="sm"
+            className="w-fit"
+            disabled={uploading || !file || !version.trim()}
+            aria-busy={uploading}
+            onClick={() => void handleUpload()}
+          >
+            {uploading ? t("models.upload.uploading") : t("models.upload.submit")}
+          </Button>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+        <p aria-live="polite" className="text-xs text-muted-foreground">
+          {uploading
+            ? t("models.upload.inProgress")
+            : uploaded
+              ? t("models.upload.done", { version: uploaded })
+              : ""}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SettingsModelsPage() {
+  const { t } = useI18n();
   const [versions, setVersions] = useState<ModelVersion[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-
-  const [version, setVersion] = useState("");
-  const [weightsPath, setWeightsPath] = useState("");
-  const [registerError, setRegisterError] = useState<string | null>(null);
-  const [registering, setRegistering] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       setVersions(await listModelVersions());
       setLoadError(null);
     } catch (err) {
-      setLoadError(err instanceof ApiError ? err.message : "Failed to load model versions.");
+      // The empty string stands for "failed, with nothing specific to say": the generic
+      // wording is picked at render time so this callback stays independent of the language
+      // and the polling effect below is not restarted by a language switch.
+      setLoadError(err instanceof ApiError ? err.message : "");
     }
   }, []);
 
@@ -185,89 +300,28 @@ export default function SettingsModelsPage() {
     return () => clearInterval(interval);
   }, [versions, refresh]);
 
-  async function handleRegister() {
-    setRegisterError(null);
-    setRegistering(true);
-    try {
-      await registerModelVersion({ version, weights_path: weightsPath });
-      setVersion("");
-      setWeightsPath("");
-      await refresh();
-    } catch (err) {
-      setRegisterError(
-        err instanceof ApiError ? err.message : "Failed to register this version."
-      );
-    } finally {
-      setRegistering(false);
-    }
-  }
-
   return (
     <div className="flex flex-col gap-6">
-      {loadError && <p className="text-sm text-destructive">{loadError}</p>}
+      {loadError !== null && (
+        <p className="text-sm text-destructive">{loadError || t("models.loadFailed")}</p>
+      )}
+
+      <UploadWeightsCard onUploaded={() => void refresh()} />
 
       <Card>
         <CardHeader>
-          <CardTitle>Register a new version</CardTitle>
-          <CardDescription>
-            Points at a local weights file. Registration always triggers a golden-set
-            evaluation (FR-12) — metrics are computed by the system itself, never entered by
-            hand (RN-10).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="grid max-w-xl grid-cols-2 gap-4">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="model-version">Version</Label>
-              <Input
-                id="model-version"
-                placeholder="v1.1.0"
-                value={version}
-                onChange={(event) => setVersion(event.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="model-weights-path">Weights path</Label>
-              <Input
-                id="model-weights-path"
-                className="font-mono text-xs"
-                placeholder="/weights/v1.1.0.pt"
-                value={weightsPath}
-                onChange={(event) => setWeightsPath(event.target.value)}
-              />
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button
-              size="sm"
-              className="w-fit"
-              disabled={registering || !version.trim() || !weightsPath.trim()}
-              onClick={() => void handleRegister()}
-            >
-              Register version
-            </Button>
-            {registerError && <p className="text-sm text-destructive">{registerError}</p>}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Versions</CardTitle>
-          <CardDescription>
-            Only one version is active at a time — activating a new one reloads the inference
-            worker without dropping in-flight requests.
-          </CardDescription>
+          <CardTitle>{t("models.versions.title")}</CardTitle>
+          <CardDescription>{t("models.versions.description")}</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Version</TableHead>
-                <TableHead>Evaluation</TableHead>
-                <TableHead>Metrics</TableHead>
-                <TableHead>Registered</TableHead>
-                <TableHead>Activation</TableHead>
+                <TableHead>{t("models.column.version")}</TableHead>
+                <TableHead>{t("models.column.evaluation")}</TableHead>
+                <TableHead>{t("models.column.metrics")}</TableHead>
+                <TableHead>{t("models.column.registered")}</TableHead>
+                <TableHead>{t("models.column.activation")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -275,10 +329,10 @@ export default function SettingsModelsPage() {
                 <TableRow key={modelVersion.id}>
                   <TableCell className="font-medium">{modelVersion.version}</TableCell>
                   <TableCell>
-                    <div className="flex flex-col gap-1">
-                      <Badge variant={STATUS_VARIANT[modelVersion.evaluation_status]}>
-                        {STATUS_LABEL[modelVersion.evaluation_status]}
-                      </Badge>
+                    <div className="flex flex-col items-start gap-1">
+                      <LampChip {...STATUS_LAMP[modelVersion.evaluation_status]}>
+                        {t(`models.status.${modelVersion.evaluation_status}`)}
+                      </LampChip>
                       {modelVersion.evaluation_status === "FAILED" &&
                         modelVersion.evaluation_error && (
                           <span className="max-w-64 text-xs text-destructive">
@@ -290,8 +344,8 @@ export default function SettingsModelsPage() {
                   <TableCell>
                     <MetricsCell modelVersion={modelVersion} />
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {new Date(modelVersion.created_at).toLocaleString()}
+                  <TableCell className="readout text-xs whitespace-nowrap text-muted-foreground">
+                    {formatTimestamp(modelVersion.created_at)}
                   </TableCell>
                   <TableCell>
                     <ActivateControl
@@ -304,7 +358,7 @@ export default function SettingsModelsPage() {
               {versions.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">
-                    No model versions registered yet.
+                    {t("models.empty")}
                   </TableCell>
                 </TableRow>
               )}

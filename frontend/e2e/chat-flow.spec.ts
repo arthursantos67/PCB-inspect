@@ -63,8 +63,9 @@ test("opens a scoped chat session from an analysis detail screen", async ({ page
   // another spec file having already produced a completed inspection first — spec files must
   // not depend on execution order.
   const boardNumber = `chat-scope-${randomUUID().slice(0, 8)}`;
+  const batchNumber = `BATCH-CHAT-${randomUUID().slice(0, 8)}`;
   const watchDir = mkdtempSync(path.join(tmpdir(), "pcb-inspect-e2e-chat-"));
-  const batchDir = path.join(watchDir, `BATCH-CHAT-${randomUUID().slice(0, 8)}`);
+  const batchDir = path.join(watchDir, batchNumber);
   mkdirSync(batchDir);
   copyFileSync(
     path.join(__dirname, "fixtures", "board.jpg"),
@@ -86,6 +87,10 @@ test("opens a scoped chat session from an analysis detail screen", async ({ page
 
   await page.getByRole("link", { name: "Dashboard" }).click();
   await expect(page).toHaveURL("/");
+  // The dashboard table lists batches, so the board is one drill-down away.
+  const batchRow = page.getByRole("row", { name: new RegExp(batchNumber) });
+  await expect(batchRow).toBeVisible({ timeout: 30_000 });
+  await batchRow.click();
   const row = page.getByRole("row", { name: new RegExp(boardNumber) });
   await expect(row).toBeVisible({ timeout: 30_000 });
   await row.getByRole("link", { name: boardNumber }).click();

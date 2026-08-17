@@ -1,8 +1,10 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useI18n, type Translate } from "@/contexts/I18nContext";
 import {
   acknowledgeAlert,
   listAlerts,
@@ -11,11 +13,13 @@ import {
 
 const ACTIVE_ALERTS_PAGE_SIZE = 50;
 
-function describeScope(alert: QualityAlert): string {
+function describeScope(alert: QualityAlert, t: Translate): string {
   if (alert.type === "defect_rate_batch") {
-    return `Batch ${alert.context.batch_number ?? alert.context.batch_id ?? "unknown"}`;
+    return t("alerts.batchScope", {
+      batch: alert.context.batch_number ?? alert.context.batch_id ?? t("alerts.unknownBatch"),
+    });
   }
-  return `Last ${alert.context.window_minutes ?? "?"} minutes`;
+  return t("alerts.windowScope", { minutes: alert.context.window_minutes ?? "?" });
 }
 
 function formatRate(rate: number): string {
@@ -29,6 +33,7 @@ function formatRate(rate: number): string {
  */
 export function AlertsBanner() {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   const alertsQuery = useQuery({
     queryKey: ["alerts", "active"],
@@ -50,12 +55,27 @@ export function AlertsBanner() {
       {alerts.map((alert) => (
         <div
           key={alert.id}
-          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm"
+          className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 overflow-hidden rounded-lg border border-border bg-card py-2.5 pr-3 pl-4 shadow-panel"
+          style={{
+            // A solid rule of the critical color down the leading edge instead of a wash
+            // across the whole row: the alert is unmistakable without turning a panel of
+            // readable text pink.
+            boxShadow: "inset 3px 0 0 var(--status-critical)",
+          }}
         >
-          <span className="text-destructive">
-            <span className="font-medium">Quality alert:</span> {describeScope(alert)} defect
-            rate is {formatRate(alert.context.observed_rate)}, above the{" "}
-            {formatRate(alert.context.threshold)} threshold.
+          <span className="flex min-w-0 items-center gap-2.5">
+            <TriangleAlert
+              aria-hidden="true"
+              className="size-4 shrink-0 text-status-critical"
+            />
+            <span className="text-[0.8125rem] leading-relaxed">
+              <span className="font-semibold">{t("alerts.title")}</span>{" "}
+              {t("alerts.body", {
+                scope: describeScope(alert, t),
+                observed: formatRate(alert.context.observed_rate),
+                threshold: formatRate(alert.context.threshold),
+              })}
+            </span>
           </span>
           <Button
             type="button"
@@ -64,7 +84,7 @@ export function AlertsBanner() {
             disabled={acknowledgeMutation.isPending}
             onClick={() => acknowledgeMutation.mutate(alert.id)}
           >
-            Acknowledge
+            {t("alerts.acknowledge")}
           </Button>
         </div>
       ))}

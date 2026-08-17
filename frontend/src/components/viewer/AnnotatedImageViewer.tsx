@@ -2,15 +2,12 @@
 
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Minus, Plus, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/contexts/I18nContext";
 import { annotateInspection, type BBox, type Detection, type ImageVariant } from "@/lib/api-client";
-import {
-  DEFECT_TYPE_COLOR,
-  DEFECT_TYPE_LABEL,
-  DEFECT_TYPES,
-  type DefectType,
-} from "@/lib/chart-colors";
+import { DEFECT_TYPE_COLOR, DEFECT_TYPES, type DefectType } from "@/lib/chart-colors";
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 4;
@@ -60,6 +57,7 @@ export function AnnotatedImageViewer({
   hoveredDetectionId,
   onHoverDetection,
 }: AnnotatedImageViewerProps) {
+  const { t } = useI18n();
   const [variant, setVariant] = useState<ImageVariant>(annotatedAvailable ? "annotated" : "original");
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState<Offset>({ x: 0, y: 0 });
@@ -221,83 +219,98 @@ export function AnnotatedImageViewer({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="inline-flex overflow-hidden rounded-md border border-border" role="group" aria-label="Image variant">
-          <button
-            type="button"
-            aria-pressed={variant === "original"}
-            onClick={() => setVariant("original")}
-            className={`px-3 py-1 text-sm font-medium ${
-              variant === "original" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
-            }`}
-          >
-            Original
-          </button>
-          <button
-            type="button"
-            aria-pressed={variant === "annotated"}
-            disabled={!annotatedAvailable}
-            onClick={() => setVariant("annotated")}
-            className={`border-l border-border px-3 py-1 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${
-              variant === "annotated" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
-            }`}
-          >
-            Annotated
-          </button>
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Which image is on screen shows as a pressed, dimmed-gray segment.
+            The labels stay as they are: they name the two
+            images, so a past tense would say nothing here. */}
+        <div
+          className="inline-flex h-8 overflow-hidden rounded-md border border-border-strong bg-card"
+          role="group"
+          aria-label={t("viewer.variantGroup")}
+        >
+          {(["original", "annotated"] as const).map((option, index) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={variant === option}
+              disabled={option === "annotated" && !annotatedAvailable}
+              onClick={() => setVariant(option)}
+              className={`px-3 text-[0.8125rem] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                index > 0 ? "border-l border-border" : ""
+              } ${
+                variant === option
+                  ? "bg-muted font-semibold text-foreground"
+                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              }`}
+            >
+              {t(`viewer.${option}`)}
+            </button>
+          ))}
         </div>
 
-        <div className="inline-flex items-center gap-1" role="group" aria-label="Zoom controls">
+        <div
+          className="inline-flex h-8 items-center overflow-hidden rounded-md border border-border-strong bg-card"
+          role="group"
+          aria-label={t("viewer.zoomControls")}
+        >
           <button
             type="button"
-            aria-label="Zoom out"
+            aria-label={t("viewer.zoomOut")}
             onClick={zoomOut}
             disabled={scale <= MIN_SCALE || annotating}
-            className="flex size-7 items-center justify-center rounded-md border border-border text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           >
-            −
+            <Minus className="size-3.5" />
           </button>
-          <span className="w-12 text-center text-xs text-muted-foreground" aria-live="polite">
+          <span
+            className="readout w-12 border-x border-border text-center text-[0.75rem] leading-8 font-semibold"
+            aria-live="polite"
+          >
             {Math.round(scale * 100)}%
           </span>
           <button
             type="button"
-            aria-label="Zoom in"
+            aria-label={t("viewer.zoomIn")}
             onClick={zoomIn}
             disabled={scale >= MAX_SCALE || annotating}
-            className="flex size-7 items-center justify-center rounded-md border border-border text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           >
-            +
+            <Plus className="size-3.5" />
           </button>
           <button
             type="button"
-            aria-label="Reset zoom and pan"
+            aria-label={t("viewer.resetView")}
             onClick={resetView}
-            disabled={annotating}
-            className="ml-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={annotating || (scale <= MIN_SCALE && offset.x === 0 && offset.y === 0)}
+            className="flex size-8 items-center justify-center border-l border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Reset
+            <RotateCcw className="size-3.5" />
           </button>
         </div>
 
         <Button
           type="button"
           size="sm"
-          variant={annotating ? "default" : "outline"}
+          className="ml-auto"
+          variant={annotating ? "selected" : "outline"}
           aria-pressed={annotating}
           onClick={toggleAnnotating}
         >
-          {annotating ? "Cancel annotation" : "Annotate missed defect"}
+          {annotating ? t("viewer.cancelAnnotation") : t("viewer.annotate")}
         </Button>
       </div>
 
       <div
         role="group"
         aria-roledescription="image viewer"
-        aria-label={`${variant === "annotated" ? "Annotated" : "Original"} PCB image, zoom and pan${
-          scale > MIN_SCALE ? " — use arrow keys to pan, Home to reset" : ""
-        }${annotating ? " — drawing a manual annotation" : ""}`}
+        aria-label={`${t("viewer.stage", { variant: t(`viewer.${variant}`) })}${
+          scale > MIN_SCALE ? t("viewer.stagePanHint") : ""
+        }${annotating ? t("viewer.stageDrawHint") : ""}`}
         tabIndex={0}
-        className="relative overflow-hidden rounded-lg border border-border bg-muted/30 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        // A dark stage, not a light box: the board sits on an inspection bench under a lamp,
+        // its greens and coppers read at full saturation against it, and the letterboxing of
+        // a wide board becomes deliberate framing instead of leftover card.
+        className="relative overflow-hidden rounded-lg border border-border bg-[oklch(0.235_0.006_264)] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         style={{
           height: VIEWER_HEIGHT,
           touchAction: "none",
@@ -322,7 +335,7 @@ export function AnnotatedImageViewer({
               <img
                 ref={imageRef}
                 src={activeUrl}
-                alt={variant === "annotated" ? "Annotated PCB inspection image" : "Original PCB inspection image"}
+                alt={variant === "annotated" ? t("viewer.altAnnotated") : t("viewer.altOriginal")}
                 className="block select-none"
                 style={{ maxHeight: VIEWER_HEIGHT, maxWidth: "100%" }}
                 draggable={false}
@@ -354,9 +367,13 @@ export function AnnotatedImageViewer({
                           backgroundColor: isHovered ? `color-mix(in srgb, ${color} 25%, transparent)` : "transparent",
                         }}
                         aria-describedby={tooltipId}
-                        aria-label={`Detection ${index + 1}: ${DEFECT_TYPE_LABEL[detection.defect_type]}, ${
-                          manual ? "manually annotated" : `${confidencePercent}% confidence`
-                        }`}
+                        aria-label={t("viewer.detection", {
+                          index: index + 1,
+                          defect: t(`defect.${detection.defect_type}`),
+                          detail: manual
+                            ? t("detail.manuallyAnnotated")
+                            : t("detail.confidence", { value: confidencePercent }),
+                        })}
                         onPointerDown={(event) => event.stopPropagation()}
                         onMouseEnter={() => onHoverDetection(detection.id)}
                         onMouseLeave={() => onHoverDetection(null)}
@@ -375,8 +392,11 @@ export function AnnotatedImageViewer({
                           id={tooltipId}
                           className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden whitespace-nowrap rounded-md bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md group-hover/box:block group-focus-visible/box:block"
                         >
-                          {DEFECT_TYPE_LABEL[detection.defect_type]}
-                          {manual ? " · Manually annotated" : ` · ${confidencePercent}% confidence`}
+                          {t(`defect.${detection.defect_type}`)}
+                          {" · "}
+                          {manual
+                            ? t("viewer.manuallyAnnotated")
+                            : t("detail.confidence", { value: confidencePercent })}
                         </span>
                       </button>
                     );
@@ -398,39 +418,38 @@ export function AnnotatedImageViewer({
             </div>
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {variant === "annotated" ? "Annotated image not available yet." : "Image not available."}
+          <div className="flex h-full items-center justify-center text-[0.8125rem] text-white/55">
+            {variant === "annotated" ? t("viewer.annotatedMissing") : t("viewer.imageMissing")}
           </div>
         )}
       </div>
 
       {annotating && (
-        <div className="flex flex-col gap-3 rounded-lg border border-border p-3" aria-label="Manual annotation tool">
-          <p className="text-sm text-muted-foreground">
-            Drag on the image above, or set the box edges directly — both update the same
-            preview.
-          </p>
+        <div
+          className="flex flex-col gap-3 rounded-lg border border-border bg-muted/40 p-4"
+          aria-label={t("viewer.tool")}
+        >
+          <p className="label-channel">{t("viewer.toolTitle")}</p>
+          <p className="-mt-1 text-[0.8125rem] text-muted-foreground">{t("viewer.toolHint")}</p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 sm:items-end">
-            <div className="flex flex-col gap-1">
-              <label htmlFor="annotation-defect-type" className="text-xs font-medium">
-                Defect type
-              </label>
+            <div className="field">
+              <label htmlFor="annotation-defect-type">{t("viewer.defectType")}</label>
               <select
                 id="annotation-defect-type"
                 value={draftDefectType}
                 onChange={(event) => setDraftDefectType(event.target.value as DefectType)}
-                className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                className="control"
               >
                 {DEFECT_TYPES.map((defectType) => (
                   <option key={defectType} value={defectType}>
-                    {DEFECT_TYPE_LABEL[defectType]}
+                    {t(`defect.${defectType}`)}
                   </option>
                 ))}
               </select>
             </div>
             {(["x1", "y1", "x2", "y2"] as const).map((corner) => (
-              <div key={corner} className="flex flex-col gap-1">
-                <label htmlFor={`annotation-${corner}`} className="text-xs font-medium uppercase">
+              <div key={corner} className="field">
+                <label htmlFor={`annotation-${corner}`} className="uppercase">
                   {corner} (%)
                 </label>
                 <input
@@ -441,22 +460,25 @@ export function AnnotatedImageViewer({
                   step={1}
                   value={draftBbox ? toPercent(draftBbox[corner]) : ""}
                   onChange={(event) => handlePercentFieldChange(corner, Number(event.target.value))}
-                  className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  className="control readout"
                 />
               </div>
             ))}
           </div>
           {annotateMutation.isError && (
-            <p className="text-sm text-destructive">Could not save this annotation. Check the box edges and try again.</p>
+            <p className="text-[0.8125rem] text-status-critical">
+              {t("viewer.saveFailed")}
+            </p>
           )}
           <div>
             <Button
               type="button"
               size="sm"
+              variant="brand"
               disabled={!draftBboxValid || annotateMutation.isPending}
               onClick={() => draftBbox && annotateMutation.mutate(draftBbox)}
             >
-              {annotateMutation.isPending ? "Saving…" : "Add annotation"}
+              {annotateMutation.isPending ? t("viewer.saving") : t("viewer.addAnnotation")}
             </Button>
           </div>
         </div>
@@ -468,19 +490,24 @@ export function AnnotatedImageViewer({
 }
 
 function ClassLegend({ detections }: { detections: Detection[] }) {
+  const { t } = useI18n();
   const present = Array.from(new Set(detections.map((detection) => detection.defect_type)));
   if (present.length === 0) return null;
 
   return (
-    <div role="list" aria-label="Defect class legend" className="flex flex-wrap gap-x-4 gap-y-1">
+    <div role="list" aria-label={t("viewer.legend")} className="flex flex-wrap gap-x-4 gap-y-1">
       {present.map((defectType) => (
-        <div key={defectType} role="listitem" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <div
+          key={defectType}
+          role="listitem"
+          className="flex items-center gap-2 text-[0.75rem] text-muted-foreground"
+        >
           <span
             aria-hidden="true"
-            className="size-2.5 shrink-0 rounded-full"
+            className="size-2 shrink-0 rounded-[2px]"
             style={{ backgroundColor: DEFECT_TYPE_COLOR[defectType] }}
           />
-          {DEFECT_TYPE_LABEL[defectType]}
+          {t(`defect.${defectType}`)}
         </div>
       ))}
     </div>

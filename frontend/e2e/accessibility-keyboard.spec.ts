@@ -58,22 +58,32 @@ test("completes the Phase-1 golden path using the keyboard alone", async ({ page
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL("/ingestion");
 
-  // --- The ad hoc import dropzone must be reachable and operable via keyboard too (it opens
-  // the native file picker on Enter/Space; opening that OS dialog isn't exercised here, but
-  // reaching + activating the control is exactly what regressed without a role/tabindex) ---
-  const dropzone = page.getByRole("button", { name: "Drop image files here, or activate to choose files" });
-  await dropzone.focus();
-  await expect(dropzone).toBeFocused();
+  // --- The folder picker that points watch mode at a folder is the only way boards enter the
+  // system (FR-03), so it has to be reachable and operable by keyboard: opening it must reveal
+  // the browser it controls, not just move focus ---
+  const chooseFolder = page.getByRole("button", { name: /Choose folder on this computer|Change folder/ });
+  await chooseFolder.focus();
+  await expect(chooseFolder).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "Use this folder" })).toBeVisible();
 
   // --- Ingestion -> Dashboard, open the ingested board from the recent-analyses table ---
   await page.getByRole("link", { name: "Dashboard" }).focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL("/");
 
-  // --- Dashboard -> Inspections (search/history), filter by board number ---
+  // --- Dashboard -> Inspections (batch list), open the batch, then filter by board number.
+  // The batch level is reached by its row link, which is what keeps the drill-down keyboard
+  // operable now that the screen is batch-first ---
   await page.getByRole("link", { name: "Inspections" }).focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL("/inspections");
+
+  const batchLink = page.getByRole("link", { name: batchNumber });
+  await expect(batchLink).toBeVisible({ timeout: 30_000 });
+  await batchLink.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`batch_number=${batchNumber}`));
 
   await page.getByLabel("Board").focus();
   await page.keyboard.type(boardNumber);

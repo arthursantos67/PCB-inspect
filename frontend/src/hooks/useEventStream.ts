@@ -4,8 +4,7 @@ import { useEffect, useState } from "react";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 
 import { getSession } from "@/lib/auth-store";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { apiUrl } from "@/lib/runtime-config";
 
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
@@ -19,7 +18,6 @@ const INVALIDATED_QUERY_KEYS: readonly string[][] = [
   ["inspections"],
   ["stats"],
   ["reports"],
-  ["dataset-exports"],
   ["alerts"],
 ];
 
@@ -50,7 +48,7 @@ export function useEventStream(enabled: boolean): EventStreamStatus {
         setStatus("connecting");
         try {
           const session = getSession();
-          const response = await fetch(`${API_URL}/api/v1/events`, {
+          const response = await fetch(`${apiUrl()}/api/v1/events`, {
             headers: session ? { Authorization: `Bearer ${session.accessToken}` } : {},
             signal: controller.signal,
           });

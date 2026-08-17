@@ -15,31 +15,39 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useI18n, type Translate } from "@/contexts/I18nContext";
 import {
-  AUDIT_ACTION_LABEL,
   AUDIT_ACTIONS,
+  type AuditAction,
   type AuditLogEntry,
   listAccounts,
   listAuditLog,
 } from "@/lib/api-client";
+import { formatTimestampPrecise } from "@/lib/format";
 
 const PAGE_SIZE = 20;
 
-const SELECT_CLASS =
-  "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
+// Shared control shell, see globals.css.
+const SELECT_CLASS = "control";
 
-function actionLabel(action: string): string {
-  return (AUDIT_ACTION_LABEL as Record<string, string>)[action] ?? action;
+/** An entry written by a newer build can carry an action this one has no wording for, so the
+ * raw string is shown rather than a missing key.
+ */
+function actionLabel(action: string, t: Translate): string {
+  return AUDIT_ACTIONS.includes(action as AuditAction)
+    ? t(`audit.action.${action as AuditAction}`)
+    : action;
 }
 
 function EntryPayload({ entry }: { entry: AuditLogEntry }) {
+  const { t } = useI18n();
   if (!entry.payload || Object.keys(entry.payload).length === 0) {
     return <span className="text-muted-foreground">—</span>;
   }
 
   return (
     <details className="text-xs">
-      <summary className="cursor-pointer whitespace-nowrap">Details</summary>
+      <summary className="cursor-pointer whitespace-nowrap">{t("audit.details")}</summary>
       <pre className="mt-1 max-w-xs overflow-x-auto whitespace-pre-wrap text-muted-foreground">
         {JSON.stringify(entry.payload, null, 2)}
       </pre>
@@ -48,6 +56,7 @@ function EntryPayload({ entry }: { entry: AuditLogEntry }) {
 }
 
 export default function SettingsAuditPage() {
+  const { t } = useI18n();
   const [accountId, setAccountId] = useState("");
   const [action, setAction] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -86,23 +95,23 @@ export default function SettingsAuditPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-lg font-semibold">Audit log</h1>
-        <p className="text-sm text-muted-foreground">
-          Every sensitive action (FR-16) is recorded here, append-only, and never editable.
-        </p>
+        <h2 className="font-heading text-base font-semibold tracking-[-0.012em]">
+          {t("audit.title")}
+        </h2>
+        <p className="mt-1 text-[0.8125rem] text-muted-foreground">{t("audit.description")}</p>
       </div>
 
-      <div className="flex flex-col gap-4 rounded-lg border border-border p-4">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="audit-filter-account">Account</Label>
+      <div className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-panel">
+        <div className="grid grid-cols-1 gap-x-4 gap-y-3.5 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="field">
+            <Label htmlFor="audit-filter-account">{t("audit.filter.account")}</Label>
             <select
               id="audit-filter-account"
               className={SELECT_CLASS}
               value={accountId}
               onChange={(event) => applyFilters({ accountId: event.target.value })}
             >
-              <option value="">All accounts</option>
+              <option value="">{t("audit.filter.allAccounts")}</option>
               {(accountsQuery.data ?? []).map((acc) => (
                 <option key={acc.id} value={acc.id}>
                   {acc.full_name} ({acc.email})
@@ -110,24 +119,24 @@ export default function SettingsAuditPage() {
               ))}
             </select>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="audit-filter-action">Action</Label>
+          <div className="field">
+            <Label htmlFor="audit-filter-action">{t("audit.filter.action")}</Label>
             <select
               id="audit-filter-action"
               className={SELECT_CLASS}
               value={action}
               onChange={(event) => applyFilters({ action: event.target.value })}
             >
-              <option value="">All actions</option>
+              <option value="">{t("audit.filter.allActions")}</option>
               {AUDIT_ACTIONS.map((value) => (
                 <option key={value} value={value}>
-                  {AUDIT_ACTION_LABEL[value]}
+                  {t(`audit.action.${value}`)}
                 </option>
               ))}
             </select>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="audit-filter-date-from">From</Label>
+          <div className="field">
+            <Label htmlFor="audit-filter-date-from">{t("audit.filter.from")}</Label>
             <Input
               id="audit-filter-date-from"
               type="date"
@@ -135,8 +144,8 @@ export default function SettingsAuditPage() {
               onChange={(event) => applyFilters({ from: event.target.value })}
             />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="audit-filter-date-to">To</Label>
+          <div className="field">
+            <Label htmlFor="audit-filter-date-to">{t("audit.filter.to")}</Label>
             <Input
               id="audit-filter-date-to"
               type="date"
@@ -152,31 +161,34 @@ export default function SettingsAuditPage() {
             className="w-fit"
             onClick={() => applyFilters({ accountId: "", action: "", from: "", to: "" })}
           >
-            Clear filters
+            {t("audit.filter.clear")}
           </Button>
         )}
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Records{listQuery.isSuccess ? ` (${total})` : ""}</CardTitle>
+          <CardTitle>
+            {t("audit.records")}
+            {listQuery.isSuccess ? ` (${total})` : ""}
+          </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>When</TableHead>
-                <TableHead>Account</TableHead>
-                <TableHead>Action</TableHead>
-                <TableHead>Entity</TableHead>
-                <TableHead>Details</TableHead>
+                <TableHead>{t("audit.column.when")}</TableHead>
+                <TableHead>{t("audit.column.account")}</TableHead>
+                <TableHead>{t("audit.column.action")}</TableHead>
+                <TableHead>{t("audit.column.entity")}</TableHead>
+                <TableHead>{t("audit.column.details")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {(listQuery.data?.results ?? []).map((entry) => (
                 <TableRow key={entry.id}>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {new Date(entry.created_at).toLocaleString()}
+                  <TableCell className="readout text-xs whitespace-nowrap text-muted-foreground">
+                    {formatTimestampPrecise(entry.created_at)}
                   </TableCell>
                   <TableCell>
                     {entry.actor ? (
@@ -187,11 +199,11 @@ export default function SettingsAuditPage() {
                         </span>
                       </span>
                     ) : (
-                      <span className="text-muted-foreground">System</span>
+                      <span className="text-muted-foreground">{t("audit.system")}</span>
                     )}
                   </TableCell>
-                  <TableCell className="font-medium">{actionLabel(entry.action)}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
+                  <TableCell className="font-medium">{actionLabel(entry.action, t)}</TableCell>
+                  <TableCell className="readout text-xs text-muted-foreground">
                     {entry.entity_type}
                     {entry.entity_id ? ` · ${entry.entity_id.slice(0, 8)}…` : ""}
                   </TableCell>
@@ -203,7 +215,7 @@ export default function SettingsAuditPage() {
               {listQuery.isSuccess && total === 0 && (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">
-                    No audit records match these filters.
+                    {t("audit.empty")}
                   </TableCell>
                 </TableRow>
               )}
@@ -213,7 +225,7 @@ export default function SettingsAuditPage() {
           {total > PAGE_SIZE && (
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">
-                Page {page} of {totalPages}
+                {t("common.pageOf", { page, total: totalPages })}
               </span>
               <div className="flex gap-2">
                 <Button
@@ -222,7 +234,7 @@ export default function SettingsAuditPage() {
                   disabled={page <= 1}
                   onClick={() => setPage((current) => current - 1)}
                 >
-                  Previous
+                  {t("common.previous")}
                 </Button>
                 <Button
                   variant="outline"
@@ -230,7 +242,7 @@ export default function SettingsAuditPage() {
                   disabled={page >= totalPages}
                   onClick={() => setPage((current) => current + 1)}
                 >
-                  Next
+                  {t("common.next")}
                 </Button>
               </div>
             </div>

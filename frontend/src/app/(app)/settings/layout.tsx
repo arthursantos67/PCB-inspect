@@ -3,26 +3,38 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { PageHeader } from "@/components/layout/PageHeader";
+import { useI18n } from "@/contexts/I18nContext";
+
+// Only the tab order and their routes live here; the words come from the dictionaries, keyed
+// by the section name.
 const SETTINGS_NAV_ITEMS = [
-  { label: "Accounts", href: "/settings/accounts" },
-  { label: "Ingestion", href: "/settings/ingestion" },
-  { label: "Detection & Analysis", href: "/settings/detection" },
-  { label: "Models", href: "/settings/models" },
-  { label: "Audit", href: "/settings/audit" },
+  { key: "accounts", href: "/settings/accounts" },
+  { key: "ingestion", href: "/settings/ingestion" },
+  { key: "detection", href: "/settings/detection" },
+  { key: "models", href: "/settings/models" },
+  { key: "audit", href: "/settings/audit" },
 ] as const;
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
+  const { t } = useI18n();
   const pathname = usePathname();
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-lg font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          Change runtime configuration — no redeploy or restart required (FR-13).
-        </p>
-      </div>
-      <nav aria-label="Settings sections" className="flex gap-1 border-b">
+      <PageHeader
+        eyebrow={t("settings.eyebrow")}
+        title={t("settings.title")}
+        description={t("settings.description")}
+      />
+
+      {/* The active section is marked by a copper rule sitting on the same hairline that
+          separates the tabs from their content, so the tab reads as physically attached to
+          the panel below it. */}
+      <nav
+        aria-label={t("settings.navLabel")}
+        className="-mb-px flex flex-wrap gap-x-1 border-b border-border"
+      >
         {SETTINGS_NAV_ITEMS.map((item) => {
           const isActive = pathname.startsWith(item.href);
           return (
@@ -30,13 +42,13 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
               key={item.href}
               href={item.href}
               aria-current={isActive ? "page" : undefined}
-              className={`rounded-t-md px-3 py-2 text-sm font-medium transition-colors ${
+              className={`-mb-px border-b-2 px-3 py-2 text-[0.8125rem] font-medium transition-colors ${
                 isActive
-                  ? "border-b-2 border-primary text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? "border-brand text-foreground"
+                  : "border-transparent text-muted-foreground hover:border-border-strong hover:text-foreground"
               }`}
             >
-              {item.label}
+              {t(`settings.nav.${item.key}`)}
             </Link>
           );
         })}

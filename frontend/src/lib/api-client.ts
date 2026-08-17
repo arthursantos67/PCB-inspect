@@ -1,7 +1,7 @@
 import { type CurrentUser, getSession, setSession } from "@/lib/auth-store";
 import type { DefectType, Severity } from "@/lib/chart-colors";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { getLanguage } from "@/lib/i18n/language-store";
+import { apiUrl } from "@/lib/runtime-config";
 
 export class ApiError extends Error {
   code: string;
@@ -56,7 +56,7 @@ export async function refreshSession(): Promise<boolean> {
   const session = getSession();
   if (!session) return false;
 
-  const response = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+  const response = await fetch(`${apiUrl()}/api/v1/auth/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh_token: session.refreshToken }),
@@ -85,7 +85,7 @@ export async function apiFetch<T>(
   }
   if (session) headers.set("Authorization", `Bearer ${session.accessToken}`);
 
-  const response = await fetch(`${API_URL}${path}`, { ...init, headers });
+  const response = await fetch(`${apiUrl()}${path}`, { ...init, headers });
 
   if (response.status === 401 && retryOn401 && session) {
     if (await refreshSession()) {
@@ -150,13 +150,6 @@ export type ScanSummary = {
   files: FileResult[];
 };
 
-export type ImportSummary = {
-  ingested: number;
-  duplicate: number;
-  failed: number;
-  files: FileResult[];
-};
-
 export type WatchStatus = "watching" | "paused" | "not_configured" | "error";
 
 export type IngestionStatus = {
@@ -178,12 +171,6 @@ export async function scanDirectory(path: string): Promise<ScanSummary> {
     method: "POST",
     body: JSON.stringify({ path }),
   });
-}
-
-export async function importFiles(files: File[]): Promise<ImportSummary> {
-  const formData = new FormData();
-  for (const file of files) formData.append("files", file);
-  return apiFetch("/api/v1/inspections/import", { method: "POST", body: formData });
 }
 
 // --- Settings config (FR-13) -------------------------------------------------------------
@@ -258,6 +245,21 @@ export async function registerModelVersion(payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+/** Uploads the `.pt` file produced by the training notebook.
+ * The backend stores it and registers it as a version, so it lands in the same golden-set
+ * evaluation and activation gate as a version registered from a path — uploading alone never
+ * puts a model into production.
+ */
+export async function uploadModelWeights(payload: {
+  version: string;
+  file: File;
+}): Promise<ModelVersion> {
+  const body = new FormData();
+  body.append("version", payload.version);
+  body.append("file", payload.file);
+  return apiFetch("/api/v1/settings/models/upload", { method: "POST", body });
 }
 
 export async function getModelEvaluation(id: string): Promise<ModelVersion> {
@@ -344,6 +346,23 @@ export async function getStatsByDefectType(): Promise<StatsByDefectType> {
   return apiFetch("/api/v1/stats/by-defect-type");
 }
 
+export type RecentBatch = {
+  batch_id: string;
+  batch_number: string;
+  defect_count: number;
+  severity: Severity | null;
+  status: ImageStatus;
+  created_at: string;
+};
+
+export type RecentBatches = {
+  results: RecentBatch[];
+};
+
+export async function getRecentBatches(limit = 10): Promise<RecentBatches> {
+  return apiFetch(`/api/v1/stats/recent-batches?limit=${limit}`);
+}
+
 // --- Inspections listing (FR-07) — used by the dashboard's recent-analyses table (FE-02) ---
 
 export type ImageStatus =
@@ -406,6 +425,54 @@ export async function listInspections(params: {
   if (params.date_from) search.set("date_from", params.date_from);
   if (params.date_to) search.set("date_to", params.date_to);
   return apiFetch(`/api/v1/inspections?${search.toString()}`);
+}
+
+// --- Batches ---------------------------------------------------------------------------
+
+export type BatchDefectTypeCount = {
+  defect_type: DefectType;
+  count: number;
+};
+
+export type BatchListItem = {
+  batch_id: string;
+  batch_number: string;
+  board_count: number;
+  completed_count: number;
+  boards_with_defects: number;
+  defect_count: number;
+  /** Share of completed boards carrying at least one reported defect, 0..1. */
+  defect_rate: number;
+  defect_types: BatchDefectTypeCount[];
+  severity: Severity | null;
+  status: ImageStatus;
+  created_at: string;
+  last_activity_at: string;
+};
+
+export type PaginatedBatches = {
+  count: number;
+  results: BatchListItem[];
+};
+
+export async function listBatches(params: {
+  page?: number;
+  page_size?: number;
+  batch_number?: string;
+  date_from?: string;
+  date_to?: string;
+}): Promise<PaginatedBatches> {
+  const search = new URLSearchParams();
+  if (params.page) search.set("page", String(params.page));
+  if (params.page_size) search.set("page_size", String(params.page_size));
+  if (params.batch_number) search.set("batch_number", params.batch_number);
+  if (params.date_from) search.set("date_from", params.date_from);
+  if (params.date_to) search.set("date_to", params.date_to);
+  return apiFetch(`/api/v1/batches?${search.toString()}`);
+}
+
+export async function getBatch(batchNumber: string): Promise<BatchListItem> {
+  return apiFetch(`/api/v1/batches/${encodeURIComponent(batchNumber)}`);
 }
 
 // --- Inspection detail (FE-03, section 11.5) --------------------------------------------
@@ -488,8 +555,13 @@ export type InspectionDetail = {
   disposition: BoardDisposition | null;
 };
 
+/** The language is sent explicitly rather than left to the station setting so the screen and
+ * the request can never disagree: the API answers with the analysis already localized, and
+ * queues the one-off translation when it is an agent-written analysis it has no cached
+ * translation for yet (issue #50).
+ */
 export async function getInspection(id: string): Promise<InspectionDetail> {
-  return apiFetch(`/api/v1/inspections/${id}`);
+  return apiFetch(`/api/v1/inspections/${id}?language=${encodeURIComponent(getLanguage())}`);
 }
 
 export type ImageVariant = "original" | "annotated";
@@ -547,6 +619,10 @@ export async function annotateInspection(
 export type ReportType = "individual" | "consolidated" | "executive";
 export type ReportFormat = "csv" | "xlsx" | "pdf";
 export type ReportStatus = "PENDING" | "COMPLETED" | "FAILED";
+/** Language the report's own headings, tables and analysis are written in.
+ * The per board analysis text the agents already stored is
+ * reproduced as recorded and is not affected by this choice. */
+export type ReportLanguage = "en" | "pt";
 
 export type Report = {
   id: string;
@@ -572,6 +648,8 @@ export type ReportFiltersInput = {
   defect_type?: DefectType[];
   batch_number?: string;
   board_number?: string;
+  /** Several boards at once, picked from the chosen batch. */
+  board_numbers?: string[];
   status?: ImageStatus;
   severity?: Severity;
   review_status?: "PENDING" | "VALIDATED" | "REJECTED";
@@ -581,9 +659,25 @@ export type ReportFiltersInput = {
 };
 
 export type ReportRequestPayload =
-  | { type: "individual"; format: "pdf"; inspection_id: string }
-  | { type: "consolidated"; format: ReportFormat; filters?: ReportFiltersInput }
-  | { type: "executive"; format: "pdf"; date_from?: string; date_to?: string };
+  | {
+      type: "individual";
+      format: ReportFormat;
+      inspection_id: string;
+      language?: ReportLanguage;
+    }
+  | {
+      type: "consolidated";
+      format: ReportFormat;
+      filters?: ReportFiltersInput;
+      language?: ReportLanguage;
+    }
+  | {
+      type: "executive";
+      format: "pdf";
+      date_from?: string;
+      date_to?: string;
+      language?: ReportLanguage;
+    };
 
 export async function requestReport(payload: ReportRequestPayload): Promise<Report> {
   return apiFetch("/api/v1/reports", { method: "POST", body: JSON.stringify(payload) });
@@ -612,7 +706,7 @@ export async function downloadReport(report: Report): Promise<void> {
   const headers: Record<string, string> = {};
   if (session) headers.Authorization = `Bearer ${session.accessToken}`;
 
-  const response = await fetch(`${API_URL}${reportDownloadPath(report.id)}`, { headers });
+  const response = await fetch(`${apiUrl()}${reportDownloadPath(report.id)}`, { headers });
   if (!response.ok) {
     await throwApiError(response);
     return;
@@ -812,7 +906,7 @@ export async function sendChatMessage(
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (session) headers.Authorization = `Bearer ${session.accessToken}`;
 
-  const response = await fetch(`${API_URL}/api/v1/chat/sessions/${sessionId}/messages`, {
+  const response = await fetch(`${apiUrl()}/api/v1/chat/sessions/${sessionId}/messages`, {
     method: "POST",
     headers,
     body: JSON.stringify({ content }),
@@ -885,7 +979,8 @@ export async function deleteAccount(id: string): Promise<void> {
 
 // Every `action` string a `record_audit(...)` call currently uses across the backend
 // (`app/audit/service.py` callers) — kept here as the single list the audit viewer's filter
-// dropdown and label lookup both draw from, so a newly-audited action only needs one addition.
+// dropdown draws from, so a newly-audited action only needs one addition. The words shown for
+// each action live in the dictionaries under `audit.action.*`.
 export const AUDIT_ACTIONS = [
   "account.created",
   "account.updated",
@@ -904,23 +999,6 @@ export const AUDIT_ACTIONS = [
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
-
-export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
-  "account.created": "Account added",
-  "account.updated": "Account updated",
-  "account.removed": "Account removed",
-  "user.login": "Login",
-  "config.updated": "Configuration changed",
-  "model.activated": "Model activated",
-  "model.evaluated": "Model evaluated",
-  "model.evaluation_failed": "Model evaluation failed",
-  "analysis.validated": "Analysis validated",
-  "analysis.rejected": "Analysis rejected",
-  "board.disposition_set": "Board disposition set",
-  "detection.reviewed": "Detection reviewed",
-  "detection.annotated": "Detection annotated",
-  "alert.acknowledged": "Alert acknowledged",
-};
 
 export type AuditActor = {
   id: string;

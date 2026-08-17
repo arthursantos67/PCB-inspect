@@ -37,6 +37,9 @@ test("validates an analysis, gives detection feedback, sets disposition, and man
 
   await page.getByRole("link", { name: "Dashboard" }).click();
   await expect(page).toHaveURL("/");
+  const batchRow = page.getByRole("row", { name: new RegExp(batchNumber) });
+  await expect(batchRow).toBeVisible({ timeout: 30_000 });
+  await batchRow.click();
   const row = page.getByRole("row", { name: new RegExp(boardNumber) });
   await expect(row).toBeVisible({ timeout: 30_000 });
   await row.getByRole("link", { name: boardNumber }).click();
@@ -47,25 +50,35 @@ test("validates an analysis, gives detection feedback, sets disposition, and man
   // --- Detection Feedback: confirm the fake backend's deterministic "short" detection ---
   const detectionsList = page.getByRole("list", { name: "Detected defects" });
   await expect(detectionsList.getByText("Short")).toBeVisible();
-  await page.getByRole("button", { name: "Confirm" }).click();
+  await page.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect(detectionsList.getByText("Feedback: Confirmed")).toBeVisible();
+  // The button itself stays visibly pressed and renames itself.
+  await expect(page.getByRole("button", { name: "Confirmed" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
 
   // --- Review Recorded: validate the analysis with a comment ---
   await page.getByLabel("Comment (optional)").fill("Looks correct.");
   await page.getByRole("button", { name: "Validate" }).click();
   await expect(page.getByText("Review status: Validated")).toBeVisible();
   await expect(page.getByText(/validated · .* — Looks correct\./)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Validated" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
 
-  // --- Disposition Recorded: set the board's final disposition ---
-  await page.getByLabel("Disposition").selectOption("approved");
-  await expect(page.getByLabel("Disposition")).toHaveValue("approved");
+  // --- Disposition Recorded: set what happens to the physical board ---
+  await page.getByLabel("What happens to this board").selectOption("approved");
+  await expect(page.getByLabel("What happens to this board")).toHaveValue("approved");
 
-  // --- Disposition shows on search results too (Issue 8's filter list) ---
+  // --- The board decision shows on search results too (Issue 8's filter list) ---
   await page.getByRole("link", { name: "Inspections" }).click();
   await expect(page).toHaveURL("/inspections");
+  await page.getByRole("row", { name: new RegExp(batchNumber) }).first().click();
   const searchRow = page.getByRole("row", { name: new RegExp(boardNumber) });
   await expect(searchRow).toBeVisible({ timeout: 30_000 });
-  await expect(searchRow.getByText("Approved")).toBeVisible();
+  await expect(searchRow.getByText("Board approved")).toBeVisible();
 
   // --- Manual Annotation: draw a bbox + class via the keyboard-only numeric-input path
   // (FE-10, Issue 24) — no pointer drag involved, proving the non-pointer path works ---
