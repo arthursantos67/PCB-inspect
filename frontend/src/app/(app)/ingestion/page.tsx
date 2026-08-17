@@ -1,47 +1,47 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
+import { FolderPicker } from "@/components/ingestion/FolderPicker";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LampChip, type LampTone } from "@/components/ui/lamp-chip";
+import { useI18n } from "@/contexts/I18nContext";
 import {
   ApiError,
   getIngestionStatus,
-  importFiles,
+  scanDirectory,
   updateConfig,
   type FileResult,
-  type ImportSummary,
   type IngestionStatus,
+  type ScanSummary,
 } from "@/lib/api-client";
 
-const STATUS_LABEL: Record<IngestionStatus["status"], string> = {
-  watching: "Watching",
-  paused: "Paused",
-  not_configured: "Not configured",
-  error: "Error",
-};
-
-const STATUS_VARIANT: Record<
+/** Watching is the only state that is doing something, so it is the only one that pulses.
+ * Paused is a deliberate stop rather than a fault, so it stays graphite instead of amber.
+ */
+const STATUS_LAMP: Record<
   IngestionStatus["status"],
-  "default" | "secondary" | "destructive" | "outline"
+  { tone: LampTone; pulse?: boolean; hollow?: boolean }
 > = {
-  watching: "default",
-  paused: "secondary",
-  not_configured: "outline",
-  error: "destructive",
+  watching: { tone: "good", pulse: true },
+  paused: { tone: "neutral" },
+  not_configured: { tone: "neutral", hollow: true },
+  error: { tone: "critical" },
 };
 
 function FileResultList({ files }: { files: FileResult[] }) {
+  const { t } = useI18n();
   const notable = files.filter((file) => file.outcome !== "ingested");
   if (notable.length === 0) return null;
   return (
     <ul className="mt-2 flex flex-col gap-1 text-xs text-muted-foreground">
       {notable.map((file) => (
         <li key={file.path}>
-          <span className="font-mono">{file.path}</span> — {file.outcome}
-          {file.reason ? `: ${file.reason}` : ""}
+          <span className="font-mono">{file.path}</span>: {t(`ingestion.outcome.${file.outcome}`)}
+          {file.reason ? ` (${file.reason})` : ""}
         </li>
       ))}
     </ul>
@@ -49,13 +49,17 @@ function FileResultList({ files }: { files: FileResult[] }) {
 }
 
 export default function IngestionPage() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<IngestionStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
-  const [importResult, setImportResult] = useState<ImportSummary | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
-  const [dragActive, setDragActive] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [browsing, setBrowsing] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const [savingFolder, setSavingFolder] = useState(false);
+
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<ScanSummary | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -63,7 +67,9 @@ export default function IngestionPage() {
       setStatus(next);
       setStatusError(null);
     } catch (err) {
-      setStatusError(err instanceof ApiError ? err.message : "Failed to load ingestion status.");
+      // The empty string stands for "failed, with nothing specific to say" — the generic
+      // wording is picked at render time so a language switch doesn't restart the poller.
+      setStatusError(err instanceof ApiError ? err.message : "");
     }
   }, []);
 
@@ -79,127 +85,167 @@ export default function IngestionPage() {
     await refreshStatus();
   }
 
-  async function handleImportFiles(files: FileList | File[]) {
-    const list = Array.from(files);
-    if (list.length === 0) return;
-    setImportError(null);
-    setImportResult(null);
+  /** Pointing watch mode at a folder is the only way boards enter the system (FR-03): the
+   * backend reads the images in place from that folder, so nothing is uploaded or copied.
+   */
+  async function handleSelectWatchRoot(path: string) {
+    setBrowsing(false);
+    setFolderError(null);
+    setScanResult(null);
+    setSavingFolder(true);
     try {
-      const summary = await importFiles(list);
-      setImportResult(summary);
+      await updateConfig({ watch_root_path: path });
+      await refreshStatus();
     } catch (err) {
-      setImportError(err instanceof ApiError ? err.message : "Import failed. Please try again.");
+      setFolderError(err instanceof ApiError ? err.message : t("ingestion.folderFailed"));
+    } finally {
+      setSavingFolder(false);
+    }
+  }
+
+  /** Watch mode already polls every few seconds; this runs the same scan immediately so the
+   * operator sees what a folder they just picked contains without waiting for the next poll.
+   */
+  async function handleScanNow() {
+    if (!status?.watch_root_path) return;
+    setScanError(null);
+    setScanResult(null);
+    setScanning(true);
+    try {
+      setScanResult(await scanDirectory(status.watch_root_path));
+      await refreshStatus();
+    } catch (err) {
+      setScanError(err instanceof ApiError ? err.message : t("ingestion.scanFailed"));
+    } finally {
+      setScanning(false);
     }
   }
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-lg font-semibold">Ingestion</h1>
-        <p className="text-sm text-muted-foreground">
-          Live watch-mode status and ad hoc imports. Watch root path, naming convention, and
-          one-off scans are configured under{" "}
-          <Link href="/settings/ingestion" className="underline underline-offset-2">
-            Settings &rsaquo; Ingestion
-          </Link>
-          .
-        </p>
-      </div>
+      <PageHeader
+        eyebrow={t("ingestion.eyebrow")}
+        title={t("ingestion.title")}
+        description={
+          <>
+            {t("ingestion.descriptionStart")}
+            <Link href="/settings/ingestion" className="text-brand-ink underline-offset-2 hover:underline">
+              {t("ingestion.descriptionLink")}
+            </Link>
+            {t("ingestion.descriptionEnd")}
+          </>
+        }
+      />
 
       <Card>
         <CardHeader>
-          <CardTitle>Watch-mode status</CardTitle>
-          <CardDescription>
-            Continuous ingestion of the configured watch root (FR-03).
-          </CardDescription>
+          <CardTitle>{t("ingestion.card.title")}</CardTitle>
+          <CardDescription>{t("ingestion.card.description")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {statusError && <p className="text-sm text-destructive">{statusError}</p>}
+          {statusError !== null && (
+            <p className="text-sm text-destructive">{statusError || t("ingestion.statusFailed")}</p>
+          )}
           {status && (
             <>
-              <div className="flex items-center gap-3">
-                <Badge variant={STATUS_VARIANT[status.status]}>{STATUS_LABEL[status.status]}</Badge>
-                {status.watch_root_path && (
-                  <span className="font-mono text-xs text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <LampChip {...STATUS_LAMP[status.status]}>
+                  {t(`ingestion.status.${status.status}`)}
+                </LampChip>
+                {status.watch_root_path ? (
+                  <span className="ident truncate text-muted-foreground">
                     {status.watch_root_path}
                   </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">{t("ingestion.noFolder")}</span>
                 )}
                 {status.detail && <span className="text-xs text-destructive">{status.detail}</span>}
               </div>
-              <div className="flex gap-6 text-sm text-muted-foreground">
-                <span>Discovered: {status.files_discovered}</span>
-                <span>Ingested: {status.files_ingested}</span>
-                <span>Failed: {status.files_failed}</span>
-              </div>
-              {status.watch_root_path && (
+              {/* The three counters are the operator's only live feedback that the folder is
+                  being read, so they are set as readings rather than a sentence. */}
+              <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-border bg-border shadow-panel">
+                {(
+                  [
+                    { key: "discovered", value: status.files_discovered },
+                    { key: "ingested", value: status.files_ingested },
+                    { key: "failed", value: status.files_failed },
+                  ] as const
+                ).map((counter) => (
+                  <div key={counter.key} className="bg-card px-3 py-2.5">
+                    <dt className="label-channel">{t(`ingestion.counter.${counter.key}`)}</dt>
+                    <dd
+                      className={`readout mt-1.5 text-lg leading-none font-semibold ${
+                        counter.key === "failed" && counter.value > 0 ? "text-status-critical" : ""
+                      }`}
+                    >
+                      {counter.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              {/* Whichever button moves the folder from idle to running carries the brand face:
+                  with no folder chosen that is picking one, and once one is chosen and paused it
+                  is resuming. Everything else on the card stays an outline control. */}
+              <div className="flex flex-wrap gap-2">
                 <Button
-                  variant="outline"
+                  variant={status.watch_root_path ? "outline" : "brand"}
                   size="sm"
-                  className="w-fit"
-                  onClick={() => void handleToggleWatchMode()}
+                  disabled={savingFolder}
+                  onClick={() => setBrowsing((open) => !open)}
                 >
-                  {status.watch_mode_enabled ? "Pause watching" : "Resume watching"}
+                  {savingFolder
+                    ? t("ingestion.saving")
+                    : status.watch_root_path
+                      ? t("ingestion.changeFolder")
+                      : t("ingestion.chooseFolder")}
                 </Button>
-              )}
+                {status.watch_root_path && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={scanning}
+                      onClick={() => void handleScanNow()}
+                    >
+                      {scanning ? t("ingestion.scanning") : t("ingestion.scanNow")}
+                    </Button>
+                    <Button
+                      variant={status.watch_mode_enabled ? "outline" : "brand"}
+                      size="sm"
+                      onClick={() => void handleToggleWatchMode()}
+                    >
+                      {status.watch_mode_enabled
+                        ? t("ingestion.pauseWatching")
+                        : t("ingestion.resumeWatching")}
+                    </Button>
+                  </>
+                )}
+              </div>
             </>
           )}
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Ad hoc import</CardTitle>
-          <CardDescription>
-            Drag in a handful of stray files that aren&apos;t already under the watch root.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <div
-            role="button"
-            tabIndex={0}
-            aria-label="Drop image files here, or activate to choose files"
-            className={`flex h-32 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-sm text-muted-foreground transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
-              dragActive ? "border-primary bg-muted/50" : "border-border"
-            }`}
-            onClick={() => fileInputRef.current?.click()}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                fileInputRef.current?.click();
-              }
-            }}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setDragActive(true);
-            }}
-            onDragLeave={() => setDragActive(false)}
-            onDrop={(event) => {
-              event.preventDefault();
-              setDragActive(false);
-              void handleImportFiles(event.dataTransfer.files);
-            }}
-          >
-            Drop image files here, or click to choose
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept="image/jpeg,image/png,image/tiff,image/bmp"
-            className="hidden"
-            onChange={(event) => {
-              if (event.target.files) void handleImportFiles(event.target.files);
-              event.target.value = "";
-            }}
-          />
-          {importError && <p className="text-sm text-destructive">{importError}</p>}
-          {importResult && (
-            <div className="rounded-lg border p-3 text-sm">
-              <p>
-                Ingested {importResult.ingested} · Duplicate {importResult.duplicate} · Failed{" "}
-                {importResult.failed}
+          {browsing && (
+            <FolderPicker
+              startPath={status?.watch_root_path ?? undefined}
+              onSelect={(path) => void handleSelectWatchRoot(path)}
+              onCancel={() => setBrowsing(false)}
+            />
+          )}
+          {folderError && <p className="text-sm text-destructive">{folderError}</p>}
+          {scanError && <p className="text-sm text-destructive">{scanError}</p>}
+          {scanResult && (
+            <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
+              <p className="ident truncate text-muted-foreground">{scanResult.path}</p>
+              <p className="mt-1">
+                {t("ingestion.scanSummary", {
+                  discovered: scanResult.discovered,
+                  ingested: scanResult.ingested,
+                  duplicate: scanResult.duplicate,
+                  failed: scanResult.failed,
+                  skipped: scanResult.skipped,
+                })}
               </p>
-              <FileResultList files={importResult.files} />
+              <FileResultList files={scanResult.files} />
             </div>
           )}
         </CardContent>

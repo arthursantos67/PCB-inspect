@@ -7,12 +7,9 @@ import { DefectBadge } from "@/components/dashboard/DefectBadge";
 import { SeverityBadge } from "@/components/dashboard/SeverityBadge";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useI18n } from "@/contexts/I18nContext";
 import type { InspectionListItem } from "@/lib/api-client";
-import { BOARD_DISPOSITION_LABEL } from "@/lib/inspection-filters";
-
-function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
+import { formatTimestamp } from "@/lib/format";
 
 /** Recent-analyses table (FE-02/FE-04) — reused as-is between the dashboard and (later)
  * search/history screen, per PRD section 12.2.
@@ -21,7 +18,7 @@ export function InspectionTable({
   items,
   isLoading,
   isError,
-  emptyMessage = "No inspections yet.",
+  emptyMessage,
 }: {
   items: InspectionListItem[];
   isLoading: boolean;
@@ -29,11 +26,12 @@ export function InspectionTable({
   emptyMessage?: string;
 }) {
   const router = useRouter();
+  const { t } = useI18n();
 
   if (!isLoading && items.length === 0) {
     return (
       <p className="py-8 text-center text-sm text-muted-foreground">
-        {isError ? "Failed to load inspections." : emptyMessage}
+        {isError ? t("inspectionTable.loadFailed") : (emptyMessage ?? t("inspectionTable.empty"))}
       </p>
     );
   }
@@ -42,13 +40,13 @@ export function InspectionTable({
     <Table aria-busy={isLoading}>
       <TableHeader>
         <TableRow>
-          <TableHead>Board</TableHead>
-          <TableHead>Batch</TableHead>
-          <TableHead>Defects</TableHead>
-          <TableHead>Severity</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead>Disposition</TableHead>
-          <TableHead>Created</TableHead>
+          <TableHead>{t("inspectionTable.column.board")}</TableHead>
+          <TableHead>{t("inspectionTable.column.batch")}</TableHead>
+          <TableHead>{t("inspectionTable.column.defects")}</TableHead>
+          <TableHead>{t("inspectionTable.column.severity")}</TableHead>
+          <TableHead>{t("inspectionTable.column.status")}</TableHead>
+          <TableHead>{t("inspectionTable.column.disposition")}</TableHead>
+          <TableHead>{t("inspectionTable.column.created")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -66,7 +64,7 @@ export function InspectionTable({
             <TableCell className="text-muted-foreground">{item.batch_number ?? "—"}</TableCell>
             <TableCell>
               {item.defect_types.length === 0 ? (
-                <span className="text-muted-foreground">None</span>
+                <span className="text-muted-foreground">{t("common.none")}</span>
               ) : (
                 <div className="flex flex-wrap gap-1">
                   {item.defect_types.map((defectType) => (
@@ -86,10 +84,10 @@ export function InspectionTable({
               <StatusBadge status={item.status} />
             </TableCell>
             <TableCell className="text-muted-foreground">
-              {item.disposition ? BOARD_DISPOSITION_LABEL[item.disposition] : "—"}
+              {item.disposition ? t(`disposition.${item.disposition}`) : "—"}
             </TableCell>
             <TableCell className="text-muted-foreground">
-              {formatDateTime(item.created_at)}
+              {formatTimestamp(item.created_at)}
             </TableCell>
           </TableRow>
         ))}

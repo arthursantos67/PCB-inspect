@@ -37,6 +37,9 @@ test("validates an analysis, gives detection feedback, sets disposition, and man
 
   await page.getByRole("link", { name: "Dashboard" }).click();
   await expect(page).toHaveURL("/");
+  const batchRow = page.getByRole("row", { name: new RegExp(batchNumber) });
+  await expect(batchRow).toBeVisible({ timeout: 30_000 });
+  await batchRow.click();
   const row = page.getByRole("row", { name: new RegExp(boardNumber) });
   await expect(row).toBeVisible({ timeout: 30_000 });
   await row.getByRole("link", { name: boardNumber }).click();
@@ -47,25 +50,42 @@ test("validates an analysis, gives detection feedback, sets disposition, and man
   // --- Detection Feedback: confirm the fake backend's deterministic "short" detection ---
   const detectionsList = page.getByRole("list", { name: "Detected defects" });
   await expect(detectionsList.getByText("Short")).toBeVisible();
-  await page.getByRole("button", { name: "Confirm" }).click();
-  await expect(detectionsList.getByText("Feedback: Confirmed")).toBeVisible();
+  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  // The button itself stays visibly pressed and renames itself (no separate status line
+  // by design, see DetectionsPanel.tsx).
+  await expect(page.getByRole("button", { name: "Confirmed" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
 
   // --- Review Recorded: validate the analysis with a comment ---
   await page.getByLabel("Comment (optional)").fill("Looks correct.");
   await page.getByRole("button", { name: "Validate" }).click();
-  await expect(page.getByText("Review status: Validated")).toBeVisible();
-  await expect(page.getByText(/validated · .* — Looks correct\./)).toBeVisible();
+  // The status label ("Analysis review") and its value ("Validated") are separate
+  // paragraphs, so this is covered by the button's own relabel + pressed state below.
+  await expect(page.getByRole("button", { name: "Validated" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+  // The review history entry (action, timestamp, comment) renders as separate elements
+  // with no literal separator text between them, so check each independently rather than
+  // matching one concatenated string.
+  const historyEntry = page.locator("li", { hasText: "Looks correct." });
+  await expect(historyEntry).toBeVisible();
+  await expect(historyEntry).toContainText("Validated");
 
-  // --- Disposition Recorded: set the board's final disposition ---
-  await page.getByLabel("Disposition").selectOption("approved");
-  await expect(page.getByLabel("Disposition")).toHaveValue("approved");
+  // --- Disposition Recorded: set what happens to the physical board ---
+  await page.getByLabel("What happens to this board").selectOption("approved");
+  await expect(page.getByLabel("What happens to this board")).toHaveValue("approved");
 
-  // --- Disposition shows on search results too (Issue 8's filter list) ---
-  await page.getByRole("link", { name: "Inspections" }).click();
+  // --- The board decision shows on search results too (Issue 8's filter list). Scoped to
+  // the "Primary" nav landmark since this detail page also has an "All inspections" link ---
+  await page.getByLabel("Primary").getByRole("link", { name: "Inspections" }).click();
   await expect(page).toHaveURL("/inspections");
+  await page.getByRole("row", { name: new RegExp(batchNumber) }).first().click();
   const searchRow = page.getByRole("row", { name: new RegExp(boardNumber) });
   await expect(searchRow).toBeVisible({ timeout: 30_000 });
-  await expect(searchRow.getByText("Approved")).toBeVisible();
+  await expect(searchRow.getByText("Board approved")).toBeVisible();
 
   // --- Manual Annotation: draw a bbox + class via the keyboard-only numeric-input path
   // (FE-10, Issue 24) — no pointer drag involved, proving the non-pointer path works ---
@@ -88,7 +108,9 @@ test("validates an analysis, gives detection feedback, sets disposition, and man
 
   await expect(detectionsList.getByText("Spurious copper")).toBeVisible();
   await expect(detectionsList.getByText("Manual", { exact: true })).toBeVisible();
-  await expect(detectionsList.getByText("Manually annotated")).toBeVisible();
+  // Manual detections show "drawn by hand" in place of a confidence percentage
+  // (DetectionsPanel.tsx); there's no separate "Manually annotated" text.
+  await expect(detectionsList.getByText("drawn by hand")).toBeVisible();
 
   await assertNoA11yViolations(page, "Inspection detail (after review/annotation)");
 });

@@ -1,31 +1,60 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowRight } from "lucide-react";
 
 import { AlertsBanner } from "@/components/dashboard/AlertsBanner";
-import { DefectDistributionChart } from "@/components/dashboard/DefectDistributionChart";
-import { DefectTrendChart } from "@/components/dashboard/DefectTrendChart";
-import { InspectionTable } from "@/components/dashboard/InspectionTable";
-import { StatCard, StatCardSkeleton } from "@/components/dashboard/StatCard";
+import {
+  AnalysisPrecisionChart,
+  AnalysisPrecisionDetail,
+} from "@/components/dashboard/AnalysisPrecisionChart";
+import { ChartGrid, ChartPanel } from "@/components/dashboard/ChartPanel";
+import { DefectClassKey } from "@/components/dashboard/DefectClassKey";
+import {
+  DefectDistributionChart,
+  DefectDistributionDetail,
+} from "@/components/dashboard/DefectDistributionChart";
+import { DefectTrendChart, DefectTrendDetail } from "@/components/dashboard/DefectTrendChart";
+import { Metric, MetricSkeleton, MetricStrip } from "@/components/dashboard/MetricStrip";
+import { PeriodSelector } from "@/components/dashboard/PeriodSelector";
+import { QualityRateChart, QualityRateDetail } from "@/components/dashboard/QualityRateChart";
+import { RecentBatchesTable } from "@/components/dashboard/RecentBatchesTable";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { useI18n } from "@/contexts/I18nContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  getRecentBatches,
   getStatsByDefectType,
   getStatsSummary,
   getStatsTrends,
-  listInspections,
   type TrendPeriod,
 } from "@/lib/api-client";
+import type { DefectType } from "@/lib/chart-colors";
 
-const RECENT_ANALYSES_PAGE_SIZE = 10;
+const RECENT_BATCHES_LIMIT = 10;
 
 export default function DashboardPage() {
+  const { t } = useI18n();
   const [period, setPeriod] = useState<TrendPeriod>("30d");
+  // Muting a class is a reading preference, not a filter on the data: it is held here so the
+  // trend and the distribution stay in agreement about which classes are on screen.
+  const [hiddenTypes, setHiddenTypes] = useState<ReadonlySet<DefectType>>(new Set());
 
-  // Every query key here is prefixed with "stats" or "inspections" — useEventStream (FE-09)
-  // already invalidates both prefixes on every SSE pipeline event, so the dashboard refreshes
-  // live with no additional wiring (Issue 8).
+  const toggleType = useCallback((defectType: DefectType) => {
+    setHiddenTypes((current) => {
+      const next = new Set(current);
+      if (!next.delete(defectType)) next.add(defectType);
+      return next;
+    });
+  }, []);
+
+  const resetTypes = useCallback(() => setHiddenTypes(new Set()), []);
+
+  // Every query key here is prefixed with "stats" — useEventStream (FE-09) already
+  // invalidates that prefix on every SSE pipeline event, so the dashboard refreshes live
+  // with no additional wiring (Issue 8).
   const summaryQuery = useQuery({ queryKey: ["stats", "summary"], queryFn: getStatsSummary });
   const trendsQuery = useQuery({
     queryKey: ["stats", "trends", period],
@@ -35,96 +64,168 @@ export default function DashboardPage() {
     queryKey: ["stats", "by-defect-type"],
     queryFn: getStatsByDefectType,
   });
-  const recentQuery = useQuery({
-    queryKey: ["inspections", "recent"],
-    queryFn: () => listInspections({ page_size: RECENT_ANALYSES_PAGE_SIZE, ordering: "-created_at" }),
+  const recentBatchesQuery = useQuery({
+    queryKey: ["stats", "recent-batches"],
+    queryFn: () => getRecentBatches(RECENT_BATCHES_LIMIT),
   });
 
   const summary = summaryQuery.data;
+  const failed = summaryQuery.isError;
+  const number = (value: number | undefined) =>
+    failed ? "—" : (value ?? 0).toLocaleString();
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-lg font-semibold">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Live inspection stats and recent analyses.</p>
-      </div>
+      <PageHeader
+        eyebrow={t("dashboard.eyebrow")}
+        title={t("dashboard.title")}
+        description={t("dashboard.description")}
+      />
 
       <AlertsBanner />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <MetricStrip>
         {summaryQuery.isPending ? (
           <>
-            <StatCardSkeleton label="Total inspected" />
-            <StatCardSkeleton label="Defects detected" />
-            <StatCardSkeleton label="Quality rate" />
-            <StatCardSkeleton label="Last 24h" />
-            <StatCardSkeleton label="Analysis precision" />
+            <MetricSkeleton label={t("dashboard.metric.inspected")} />
+            <MetricSkeleton label={t("dashboard.metric.withDefects")} />
+            <MetricSkeleton label={t("dashboard.metric.detected")} />
+            <MetricSkeleton label={t("dashboard.metric.last24h")} />
           </>
         ) : (
           <>
-            <StatCard
-              label="Total inspected"
-              value={summaryQuery.isError ? "—" : (summary?.total_inspected ?? 0).toLocaleString()}
-              hint="Completed inspections"
+            <Metric
+              label={t("dashboard.metric.inspected")}
+              value={number(summary?.total_inspected)}
+              hint={t("dashboard.metric.inspectedHint")}
             />
-            <StatCard
-              label="Defects detected"
-              value={summaryQuery.isError ? "—" : (summary?.total_with_defects ?? 0).toLocaleString()}
-              hint="Inspections with a reported defect"
+            {/* Counts inspected boards carrying at least one reported defect, not individual
+                detections: one board with four defects counts once here. */}
+            <Metric
+              label={t("dashboard.metric.withDefects")}
+              value={number(summary?.total_with_defects)}
+              tone={(summary?.total_with_defects ?? 0) > 0 ? "attention" : "default"}
+              hint={t("dashboard.metric.withDefectsHint")}
             />
-            <StatCard
-              label="Quality rate"
-              value={summaryQuery.isError ? "—" : `${(summary?.quality_rate ?? 0).toFixed(1)}%`}
-              hint="Defect-free share of inspections"
-            />
-            <StatCard
-              label="Last 24h"
-              value={summaryQuery.isError ? "—" : (summary?.last_24h_count ?? 0).toLocaleString()}
-              hint="Completed in the past 24 hours"
-            />
-            <StatCard
-              label="Analysis precision"
+            <Metric
+              label={t("dashboard.metric.detected")}
               value={
-                summaryQuery.isError || summary?.analysis_precision_rate == null
-                  ? "—"
-                  : `${summary.analysis_precision_rate.toFixed(1)}%`
+                distributionQuery.isError ? "—" : (distributionQuery.data?.total ?? 0).toLocaleString()
               }
-              hint={
-                summaryQuery.isError
-                  ? undefined
-                  : `${summary?.analyses_validated ?? 0} validated, ${summary?.analyses_rejected ?? 0} rejected`
-              }
+              hint={t("dashboard.metric.detectedHint")}
+            />
+            <Metric
+              label={t("dashboard.metric.last24h")}
+              value={number(summary?.last_24h_count)}
+              hint={t("dashboard.metric.last24hHint")}
             />
           </>
         )}
-      </div>
+      </MetricStrip>
 
-      <DefectTrendChart
-        data={trendsQuery.data}
-        period={period}
-        onPeriodChange={setPeriod}
-        isLoading={trendsQuery.isPending}
-        isError={trendsQuery.isError}
-      />
+      <ChartGrid
+        footer={
+          <DefectClassKey hidden={hiddenTypes} onToggle={toggleType} onReset={resetTypes} />
+        }
+      >
+        <ChartPanel
+          channel={t("dashboard.trend.channel")}
+          title={t("dashboard.trend.title")}
+          description={t("dashboard.trend.description")}
+          toolbar={<PeriodSelector value={period} onChange={setPeriod} />}
+          detail={
+            <DefectTrendDetail data={trendsQuery.data} period={period} hidden={hiddenTypes} />
+          }
+        >
+          {(expanded) => (
+            <DefectTrendChart
+              data={trendsQuery.data}
+              hidden={hiddenTypes}
+              expanded={expanded}
+              isLoading={trendsQuery.isPending}
+              isError={trendsQuery.isError}
+            />
+          )}
+        </ChartPanel>
 
-      <DefectDistributionChart
-        data={distributionQuery.data}
-        isLoading={distributionQuery.isPending}
-        isError={distributionQuery.isError}
-      />
+        <ChartPanel
+          channel={t("dashboard.distribution.channel")}
+          title={t("dashboard.distribution.title")}
+          description={t("dashboard.distribution.description")}
+          headline={
+            distributionQuery.data ? (
+              <span className="readout text-[0.8125rem] font-semibold">
+                {distributionQuery.data.total.toLocaleString()}
+                <span className="ml-1.5 font-sans text-[0.6875rem] font-normal text-muted-foreground">
+                  {t("dashboard.distribution.detections")}
+                </span>
+              </span>
+            ) : null
+          }
+          detail={
+            <DefectDistributionDetail data={distributionQuery.data} hidden={hiddenTypes} />
+          }
+        >
+          {(expanded) => (
+            <DefectDistributionChart
+              data={distributionQuery.data}
+              hidden={hiddenTypes}
+              expanded={expanded}
+              isLoading={distributionQuery.isPending}
+              isError={distributionQuery.isError}
+            />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          channel={t("dashboard.quality.channel")}
+          title={t("dashboard.quality.title")}
+          description={t("dashboard.quality.description")}
+          detail={<QualityRateDetail summary={summary} />}
+        >
+          {(expanded) => (
+            <QualityRateChart
+              summary={summary}
+              expanded={expanded}
+              isLoading={summaryQuery.isPending}
+              isError={summaryQuery.isError}
+            />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          channel={t("dashboard.precision.channel")}
+          title={t("dashboard.precision.title")}
+          description={t("dashboard.precision.description")}
+          detail={<AnalysisPrecisionDetail summary={summary} />}
+        >
+          {(expanded) => (
+            <AnalysisPrecisionChart
+              summary={summary}
+              expanded={expanded}
+              isLoading={summaryQuery.isPending}
+              isError={summaryQuery.isError}
+            />
+          )}
+        </ChartPanel>
+      </ChartGrid>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Recent analyses</CardTitle>
-          <Link href="/inspections" className="text-sm text-primary hover:underline">
-            View all
+          <CardTitle>{t("dashboard.recentBatches")}</CardTitle>
+          <Link
+            href="/inspections"
+            className="inline-flex items-center gap-1 text-[0.8125rem] text-brand-ink transition-colors hover:text-foreground"
+          >
+            {t("dashboard.allInspections")}
+            <ArrowRight className="size-3.5" />
           </Link>
         </CardHeader>
         <CardContent>
-          <InspectionTable
-            items={recentQuery.data?.results ?? []}
-            isLoading={recentQuery.isPending}
-            isError={recentQuery.isError}
+          <RecentBatchesTable
+            items={recentBatchesQuery.data?.results ?? []}
+            isLoading={recentBatchesQuery.isPending}
+            isError={recentBatchesQuery.isError}
           />
         </CardContent>
       </Card>

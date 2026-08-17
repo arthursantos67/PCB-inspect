@@ -58,24 +58,36 @@ test("completes the Phase-1 golden path using the keyboard alone", async ({ page
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL("/ingestion");
 
-  // --- The ad hoc import dropzone must be reachable and operable via keyboard too (it opens
-  // the native file picker on Enter/Space; opening that OS dialog isn't exercised here, but
-  // reaching + activating the control is exactly what regressed without a role/tabindex) ---
-  const dropzone = page.getByRole("button", { name: "Drop image files here, or activate to choose files" });
-  await dropzone.focus();
-  await expect(dropzone).toBeFocused();
+  // --- The folder picker that points watch mode at a folder is the only way boards enter the
+  // system (FR-03), so it has to be reachable and operable by keyboard: opening it must reveal
+  // the browser it controls, not just move focus ---
+  const chooseFolder = page.getByRole("button", { name: /Choose folder on this computer|Change folder/ });
+  await chooseFolder.focus();
+  await expect(chooseFolder).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "Use this folder" })).toBeVisible();
 
   // --- Ingestion -> Dashboard, open the ingested board from the recent-analyses table ---
   await page.getByRole("link", { name: "Dashboard" }).focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL("/");
 
-  // --- Dashboard -> Inspections (search/history), filter by board number ---
-  await page.getByRole("link", { name: "Inspections" }).focus();
+  // --- Dashboard -> Inspections (batch list), open the batch, then filter by board number.
+  // The batch level is reached by its row link, which is what keeps the drill-down keyboard
+  // operable now that the screen is batch-first. Scoped to the "Primary" nav landmark since
+  // the dashboard also has an "All inspections" link whose accessible name contains this one ---
+  await page.getByLabel("Primary").getByRole("link", { name: "Inspections" }).focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL("/inspections");
 
-  await page.getByLabel("Board").focus();
+  const batchLink = page.getByRole("link", { name: batchNumber });
+  await expect(batchLink).toBeVisible({ timeout: 30_000 });
+  await batchLink.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`batch_number=${batchNumber}`));
+
+  // exact: true — "Board decision" is a substring match of "Board" otherwise
+  await page.getByLabel("Board", { exact: true }).focus();
   await page.keyboard.type(boardNumber);
   const row = page.getByRole("row", { name: new RegExp(boardNumber) });
   await expect(row).toBeVisible({ timeout: 30_000 });
@@ -84,7 +96,10 @@ test("completes the Phase-1 golden path using the keyboard alone", async ({ page
   await row.getByRole("link", { name: boardNumber }).focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/inspections\/.+/);
-  await expect(page.getByText(`Board ${boardNumber}`)).toBeVisible();
+  // The heading's label and the board number are separate spans (no literal space between
+  // them in the DOM), so match on the accessible name (which the accname algorithm joins
+  // with a space) rather than raw text content.
+  await expect(page.getByRole("heading", { name: new RegExp(boardNumber) })).toBeVisible();
 
   // --- Detail screen: toggle to the annotated image and reach a bbox detection button,
   // all via keyboard, once the pipeline has produced a detection ---

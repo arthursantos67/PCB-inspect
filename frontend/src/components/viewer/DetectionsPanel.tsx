@@ -4,7 +4,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { DefectBadge } from "@/components/dashboard/DefectBadge";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/contexts/I18nContext";
 import { submitDetectionFeedback, type Detection } from "@/lib/api-client";
+import { DEFECT_TYPE_COLOR } from "@/lib/chart-colors";
 
 type DetectionsPanelProps = {
   inspectionId: string;
@@ -13,11 +15,6 @@ type DetectionsPanelProps = {
   onHoverDetection: (id: string | null) => void;
 };
 
-const REVIEW_LABEL: Record<Detection["review"], string> = {
-  unreviewed: "Unreviewed",
-  confirmed: "Confirmed",
-  false_positive: "False positive",
-};
 
 /** Detections list synchronized with the viewer (FE-03): hovering/focusing a row highlights
  * the matching bounding box and vice versa, via the shared `hoveredDetectionId` state lifted
@@ -30,6 +27,7 @@ export function DetectionsPanel({
   hoveredDetectionId,
   onHoverDetection,
 }: DetectionsPanelProps) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const feedbackMutation = useMutation({
     mutationFn: ({ detectionId, review }: { detectionId: string; review: "confirmed" | "false_positive" }) =>
@@ -40,11 +38,11 @@ export function DetectionsPanel({
   });
 
   if (detections.length === 0) {
-    return <p className="text-sm text-muted-foreground">No reportable defects detected.</p>;
+    return <p className="text-sm text-muted-foreground">{t("detections.empty")}</p>;
   }
 
   return (
-    <ul className="flex flex-col gap-1.5" aria-label="Detected defects">
+    <ul className="flex flex-col gap-1.5" aria-label={t("detections.listLabel")}>
       {detections.map((detection, index) => {
         const isHovered = hoveredDetectionId === detection.id;
         const isPending =
@@ -52,68 +50,99 @@ export function DetectionsPanel({
         return (
           <li key={detection.id}>
             <div
-              className={`flex flex-col gap-2 rounded-md border px-3 py-2 transition-colors ${
-                isHovered ? "border-primary bg-muted" : "border-border hover:bg-muted/50"
+              className={`relative overflow-hidden rounded-md border px-3 py-2.5 transition-colors ${
+                isHovered ? "border-brand bg-accent" : "border-border hover:bg-accent/50"
               }`}
             >
               <button
                 type="button"
-                className="flex w-full items-center justify-between gap-2 text-left text-sm"
+                className="flex w-full items-center gap-2 text-left"
                 onMouseEnter={() => onHoverDetection(detection.id)}
                 onMouseLeave={() => onHoverDetection(null)}
                 onFocus={() => onHoverDetection(detection.id)}
                 onBlur={() => onHoverDetection(null)}
               >
-                <span className="flex items-center gap-2">
-                  <span
-                    aria-hidden="true"
-                    className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold"
-                  >
-                    {index + 1}
-                  </span>
-                  <DefectBadge defectType={detection.defect_type} />
-                  {detection.source === "manual" && (
-                    <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                      Manual
-                    </span>
-                  )}
+                {/* Same number as the box on the image and the analysis passage below. */}
+                <span
+                  aria-hidden="true"
+                  className="readout flex size-5 shrink-0 items-center justify-center rounded-[4px] border border-border bg-card text-[0.6875rem] font-semibold"
+                >
+                  {index + 1}
                 </span>
-                <span className="whitespace-nowrap text-xs text-muted-foreground">
-                  {detection.source === "manual"
-                    ? "Manually annotated"
-                    : `${(Number(detection.confidence) * 100).toFixed(1)}% confidence`}
+                <DefectBadge defectType={detection.defect_type} />
+                {detection.source === "manual" && (
+                  <span className="label-channel border-l border-border pl-2">
+                    {t("detections.manual")}
+                  </span>
+                )}
+                <span className="readout ml-auto text-[0.75rem] font-semibold whitespace-nowrap">
+                  {detection.source === "manual" ? (
+                    <span className="font-normal text-muted-foreground">
+                      {t("detections.drawnByHand")}
+                    </span>
+                  ) : (
+                    <>
+                      {(Number(detection.confidence) * 100).toFixed(1)}
+                      <span className="font-normal text-muted-foreground">%</span>
+                    </>
+                  )}
                 </span>
               </button>
 
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs text-muted-foreground">
-                  Feedback: {REVIEW_LABEL[detection.review]}
-                </span>
-                <div className="flex gap-1.5" role="group" aria-label={`Feedback for detection ${index + 1}`}>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={detection.review === "confirmed" ? "default" : "outline"}
-                    disabled={isPending}
-                    onClick={() =>
-                      feedbackMutation.mutate({ detectionId: detection.id, review: "confirmed" })
-                    }
-                  >
-                    Confirm
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={detection.review === "false_positive" ? "default" : "outline"}
-                    disabled={isPending}
-                    onClick={() =>
-                      feedbackMutation.mutate({ detectionId: detection.id, review: "false_positive" })
-                    }
-                  >
-                    False positive
-                  </Button>
-                </div>
+              {/* The chosen option stays visibly pressed in a dimmed gray and its label
+                  switches to the past tense, so a row that
+                  was already reviewed reads as reviewed with no separate status line. */}
+              <div
+                className="mt-2 flex gap-1.5"
+                role="group"
+                aria-label={t("detections.feedbackGroup", { index: index + 1 })}
+              >
+                <Button
+                  type="button"
+                  size="sm"
+                  aria-pressed={detection.review === "confirmed"}
+                  variant={detection.review === "confirmed" ? "selected" : "outline"}
+                  disabled={isPending}
+                  onClick={() =>
+                    feedbackMutation.mutate({ detectionId: detection.id, review: "confirmed" })
+                  }
+                >
+                  {detection.review === "confirmed"
+                    ? t("detections.confirmed")
+                    : t("detections.confirm")}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  aria-pressed={detection.review === "false_positive"}
+                  variant={detection.review === "false_positive" ? "selected" : "outline"}
+                  disabled={isPending}
+                  onClick={() =>
+                    feedbackMutation.mutate({ detectionId: detection.id, review: "false_positive" })
+                  }
+                >
+                  {detection.review === "false_positive"
+                    ? t("detections.markedFalsePositive")
+                    : t("detections.falsePositive")}
+                </Button>
               </div>
+
+              {/* Confidence read as a meter along the row's bottom edge: a column of these is
+                  scannable as "how sure was the model", which a column of numbers is not. */}
+              {detection.source !== "manual" && (
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-0 bottom-0 h-[2px] bg-border/60"
+                >
+                  <span
+                    className="block h-full rounded-r-full transition-[width] duration-500"
+                    style={{
+                      width: `${Math.min(100, Number(detection.confidence) * 100)}%`,
+                      backgroundColor: DEFECT_TYPE_COLOR[detection.defect_type],
+                    }}
+                  />
+                </span>
+              )}
             </div>
           </li>
         );

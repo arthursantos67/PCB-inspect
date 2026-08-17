@@ -9,23 +9,15 @@ import { DEFECT_TYPES, SEVERITIES, type DefectType, type Severity } from "@/lib/
 export type ReviewStatusFilter = "PENDING" | "VALIDATED" | "REJECTED";
 
 // Fixed enumeration order for the review-status/disposition filter dropdowns (FE-04, FR-10).
+// The words behind these values live in the i18n dictionaries, under `reviewStatus.` and
+// `disposition.` — this module owns the enumeration and its URL round-trip, not the wording.
 export const REVIEW_STATUSES: readonly ReviewStatusFilter[] = ["PENDING", "VALIDATED", "REJECTED"];
-export const REVIEW_STATUS_LABEL: Record<ReviewStatusFilter, string> = {
-  PENDING: "Pending review",
-  VALIDATED: "Validated",
-  REJECTED: "Rejected",
-};
 
 export const BOARD_DISPOSITIONS: readonly BoardDispositionDecision[] = [
   "approved",
   "rework",
   "discarded",
 ];
-export const BOARD_DISPOSITION_LABEL: Record<BoardDispositionDecision, string> = {
-  approved: "Approved",
-  rework: "Needs rework",
-  discarded: "Discarded",
-};
 
 export type InspectionFilterValues = {
   defect_type: DefectType[];

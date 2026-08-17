@@ -4,7 +4,9 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/contexts/I18nContext";
 import { reviewAnalysis, type AnalysisReview } from "@/lib/api-client";
+import { formatTimestamp } from "@/lib/format";
 
 type ReviewPanelProps = {
   inspectionId: string;
@@ -13,21 +15,12 @@ type ReviewPanelProps = {
   reviews: AnalysisReview[];
 };
 
-const STATUS_LABEL: Record<ReviewPanelProps["reviewStatus"], string> = {
-  PENDING: "Pending review",
-  VALIDATED: "Validated",
-  REJECTED: "Rejected",
-};
-
-function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
-
 /** Validate/reject an analysis with an optional comment (FR-10, UC-8) — the analysis-level
  * counterpart to `DetectionsPanel`'s per-detection feedback. History is shown below so the
  * action is visibly "queryable later" without leaving the page.
  */
 export function ReviewPanel({ inspectionId, analysisId, reviewStatus, reviews }: ReviewPanelProps) {
+  const { t } = useI18n();
   const [comment, setComment] = useState("");
   const queryClient = useQueryClient();
 
@@ -40,58 +33,70 @@ export function ReviewPanel({ inspectionId, analysisId, reviewStatus, reviews }:
   });
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-medium">Review status: {STATUS_LABEL[reviewStatus]}</span>
+    <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/40 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="label-channel">{t("review.title")}</p>
+          <p className="mt-1 text-[0.8125rem] font-medium">{t(`reviewStatus.${reviewStatus}`)}</p>
+        </div>
+        {/* The decision already on record shows as pressed, in a dimmed gray, with its label
+            in the past tense. Both stay clickable: reviewing
+            again is allowed and appends to the history below. */}
         <div className="flex gap-2">
           <Button
             type="button"
             size="sm"
+            aria-pressed={reviewStatus === "VALIDATED"}
+            variant={reviewStatus === "VALIDATED" ? "selected" : "brand"}
             disabled={reviewMutation.isPending}
             onClick={() => reviewMutation.mutate("validated")}
           >
-            Validate
+            {reviewStatus === "VALIDATED" ? t("review.validated") : t("review.validate")}
           </Button>
           <Button
             type="button"
             size="sm"
-            variant="outline"
+            aria-pressed={reviewStatus === "REJECTED"}
+            variant={reviewStatus === "REJECTED" ? "selected" : "outline"}
             disabled={reviewMutation.isPending}
             onClick={() => reviewMutation.mutate("rejected")}
           >
-            Reject
+            {reviewStatus === "REJECTED" ? t("review.rejected") : t("review.reject")}
           </Button>
         </div>
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="review-comment" className="text-xs font-medium text-muted-foreground">
-          Comment (optional)
-        </label>
+      <div className="field">
+        <label htmlFor="review-comment">{t("review.comment")}</label>
         <textarea
           id="review-comment"
           value={comment}
           onChange={(event) => setComment(event.target.value)}
           rows={2}
-          className="w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          placeholder="Why is this being validated or rejected?"
+          className="control h-auto py-1.5 leading-relaxed"
+          placeholder={t("review.commentPlaceholder")}
         />
       </div>
 
       {reviewMutation.isError && (
-        <p className="text-sm text-destructive">Could not record this review. Please try again.</p>
+        <p className="text-[0.8125rem] text-status-critical">
+          {t("review.failed")}
+        </p>
       )}
 
       {reviews.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-muted-foreground">History</span>
+        <div className="flex flex-col gap-2 border-t border-border pt-3">
+          <p className="label-channel">{t("review.history")}</p>
           <ul className="flex flex-col gap-1.5">
             {reviews.map((review) => (
-              <li key={review.id} className="text-xs text-muted-foreground">
-                <span className="font-medium capitalize text-foreground">{review.action}</span>
-                {" · "}
-                {formatDateTime(review.created_at)}
-                {review.comment && <span> — {review.comment}</span>}
+              <li key={review.id} className="text-[0.75rem] text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  {t(`review.action.${review.action}`)}
+                </span>
+                <span className="readout mx-2 text-[0.6875rem]">
+                  {formatTimestamp(review.created_at)}
+                </span>
+                {review.comment && <span>{review.comment}</span>}
               </li>
             ))}
           </ul>

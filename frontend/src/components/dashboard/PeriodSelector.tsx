@@ -1,16 +1,19 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { useI18n } from "@/contexts/I18nContext";
 import type { TrendPeriod } from "@/lib/api-client";
 
+// The labels stay "7d"/"30d"/"90d" in both languages: they are read as instrument markings,
+// not as words. The spelled-out period behind each one is what gets translated.
 const OPTIONS: { value: TrendPeriod; label: string }[] = [
   { value: "7d", label: "7d" },
   { value: "30d", label: "30d" },
   { value: "90d", label: "90d" },
 ];
 
-/** Segmented period control (FE-02) — plain buttons rather than a dropdown so every option
- * is reachable with a single Tab stop and arrow-free keyboard nav (FE-10).
+/** Segmented range control (FE-02) — plain buttons rather than a dropdown, so every option
+ * is one Tab stop away and needs no arrow-key convention to operate (FE-10). Set in the
+ * instrument face, since a range is a setting on the reading.
  */
 export function PeriodSelector({
   value,
@@ -19,24 +22,32 @@ export function PeriodSelector({
   value: TrendPeriod;
   onChange: (period: TrendPeriod) => void;
 }) {
+  const { t } = useI18n();
   return (
     <div
       role="group"
-      aria-label="Trend period"
-      className="inline-flex gap-0.5 rounded-lg border border-border p-0.5"
+      aria-label={t("dashboard.period.group")}
+      className="inline-flex items-center gap-0.5 rounded-md border border-border bg-muted/70 p-[3px]"
     >
-      {OPTIONS.map((option) => (
-        <Button
-          key={option.value}
-          type="button"
-          size="sm"
-          variant={value === option.value ? "secondary" : "ghost"}
-          aria-pressed={value === option.value}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </Button>
-      ))}
+      {OPTIONS.map((option) => {
+        const active = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={active}
+            title={t(`dashboard.period.${option.value}`)}
+            onClick={() => onChange(option.value)}
+            className={`readout rounded-[4px] px-2 py-1 text-[0.6875rem] font-medium transition-colors ${
+              active
+                ? "bg-card text-foreground shadow-panel"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

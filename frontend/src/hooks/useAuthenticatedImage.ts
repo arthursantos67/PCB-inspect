@@ -4,8 +4,7 @@ import { useEffect, useState } from "react";
 
 import { getSession } from "@/lib/auth-store";
 import { inspectionImagePath, type ImageVariant } from "@/lib/api-client";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { apiUrl } from "@/lib/runtime-config";
 
 export type AuthenticatedImageState = {
   url: string | null;
@@ -42,7 +41,7 @@ export function useAuthenticatedImage(
     async function load() {
       try {
         const session = getSession();
-        const response = await fetch(`${API_URL}${inspectionImagePath(inspectionId, variant)}`, {
+        const response = await fetch(`${apiUrl()}${inspectionImagePath(inspectionId, variant)}`, {
           headers: session ? { Authorization: `Bearer ${session.accessToken}` } : {},
         });
         if (!response.ok) throw new Error(`Image fetch failed with status ${response.status}`);
