@@ -51,6 +51,10 @@ class InspectionFilters:
     defect_type: list[DefectType] | None = None
     batch_number: str | None = None
     board_number: str | None = None
+    # Report-side only: the reports screen selects boards from a list rather than typing one
+    # name, so several can be named at once. The search endpoint
+    # keeps exposing the single `board_number` query parameter.
+    board_numbers: list[str] | None = None
     status: ImageStatus | None = None
     severity: Severity | None = None
     review_status: AnalysisReviewStatus | None = None
@@ -76,6 +80,8 @@ def apply_filters(stmt: Select[Any], filters: InspectionFilters) -> Select[Any]:
         stmt = stmt.where(Batch.batch_number == filters.batch_number)
     if filters.board_number:
         stmt = stmt.where(Board.board_number == filters.board_number)
+    if filters.board_numbers:
+        stmt = stmt.where(Board.board_number.in_(filters.board_numbers))
     if filters.status:
         stmt = stmt.where(InspectionImage.status == filters.status)
     if filters.severity:

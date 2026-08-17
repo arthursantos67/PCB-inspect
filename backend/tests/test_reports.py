@@ -66,7 +66,9 @@ async def test_request_individual_report_queues_and_returns_pending(
     assert body["format"] == "pdf"
     assert body["status"] == "PENDING"
     assert body["file_path"] is None
-    assert body["filters"] == {"inspection_id": inspection_id}
+    # The report's language is recorded with its filters so generation, which happens later in
+    # a worker, reads it from the same place.
+    assert body["filters"] == {"inspection_id": inspection_id, "language": "en"}
     assert _stub_generate_report.calls == [body["id"]]
 
 
@@ -86,7 +88,7 @@ async def test_request_consolidated_report_accepts_csv_xlsx_and_pdf(
             headers=_auth_headers(token),
         )
         assert response.status_code == 202, response.text
-        assert response.json()["filters"] == {"batch_number": "BATCH-A"}
+        assert response.json()["filters"] == {"batch_number": "BATCH-A", "language": "en"}
 
 
 async def test_request_consolidated_report_with_no_filters_means_every_inspection(
@@ -101,7 +103,7 @@ async def test_request_consolidated_report_with_no_filters_means_every_inspectio
     )
 
     assert response.status_code == 202, response.text
-    assert response.json()["filters"] == {}
+    assert response.json()["filters"] == {"language": "en"}
 
 
 async def test_request_executive_report_accepts_a_date_range(
@@ -124,23 +126,78 @@ async def test_request_executive_report_accepts_a_date_range(
     assert response.json()["filters"] == {
         "date_from": "2026-01-01T00:00:00+00:00",
         "date_to": "2026-01-31T23:59:59+00:00",
+        "language": "en",
     }
 
 
-async def test_individual_report_rejects_unsupported_format(
+async def test_report_language_is_recorded_with_the_request(
     client: AsyncClient, _stub_generate_report: _FakeGenerateReportTask
 ) -> None:
     token = await _setup_account(client)
 
     response = await client.post(
         "/api/v1/reports",
-        json={"type": "individual", "format": "csv", "inspection_id": str(uuid.uuid4())},
+        json={
+            "type": "consolidated",
+            "format": "pdf",
+            "language": "pt",
+            "filters": {"batch_number": "BATCH-A", "board_numbers": ["A1", "A2"]},
+        },
         headers=_auth_headers(token),
     )
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "VALIDATION_FAILED"
-    assert _stub_generate_report.calls == []
+    assert response.status_code == 202, response.text
+    assert response.json()["filters"] == {
+        "batch_number": "BATCH-A",
+        "board_numbers": ["A1", "A2"],
+        "language": "pt",
+    }
+
+
+async def test_omitted_report_language_falls_back_to_the_station_language(
+    client: AsyncClient, _stub_generate_report: _FakeGenerateReportTask
+) -> None:
+    """The reports screen only sends `language` when the operator overrides it, so a station
+    switched to Portuguese (issue #50) has to produce Portuguese reports on its own.
+    """
+    token = await _setup_account(client)
+    patch_response = await client.patch(
+        "/api/v1/settings/config",
+        json={"config": {"ui_language": "pt"}},
+        headers=_auth_headers(token),
+    )
+    assert patch_response.status_code == 200, patch_response.text
+
+    response = await client.post(
+        "/api/v1/reports",
+        json={"type": "consolidated", "format": "pdf", "filters": {"batch_number": "BATCH-A"}},
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["filters"] == {"batch_number": "BATCH-A", "language": "pt"}
+
+
+async def test_individual_report_accepts_the_tabular_formats(
+    client: AsyncClient, _stub_generate_report: _FakeGenerateReportTask
+) -> None:
+    """A single board's defect occurrences tabulate as well as a batch's, so the individual
+    report is no longer PDF only.
+    """
+    token = await _setup_account(client)
+
+    for report_format in ("pdf", "csv", "xlsx"):
+        response = await client.post(
+            "/api/v1/reports",
+            json={
+                "type": "individual",
+                "format": report_format,
+                "inspection_id": str(uuid.uuid4()),
+            },
+            headers=_auth_headers(token),
+        )
+        assert response.status_code == 202, response.text
+        assert response.json()["format"] == report_format
 
 
 async def test_executive_report_rejects_unsupported_format(

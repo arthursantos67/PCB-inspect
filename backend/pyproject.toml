@@ -40,6 +40,10 @@ dev = [
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    # Reads back the generated PDFs in tests/test_report_content.py: a report's outline and
+    # page text are the deliverable, so asserting only that a file starts with %PDF would not
+    # check anything the operator cares about.
+    "pypdf>=5.1",
 ]
 
 [build-system]
