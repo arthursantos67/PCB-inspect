@@ -132,7 +132,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
-          cache-suffix: ${{ github.job }}
+          # The GitHub Actions cache save hangs for ~5min then fails in this job
+          # specifically (reproduced 3 runs straight, unrelated to the cache key),
+          # so skip persisting it here rather than fight that.
+          enable-cache: false
       - run: uv sync --extra dev
         working-directory: backend
 
