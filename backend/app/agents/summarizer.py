@@ -6,10 +6,12 @@ from collections.abc import Sequence
 
 from pydantic import ValidationError
 
+from app.agents.batch_context import BatchContext
 from app.agents.errors import AgentChainAbortedError
 from app.agents.llm_client import LLMClient, LLMUnavailableError
 from app.agents.prompts import v1 as prompts
 from app.agents.schemas import AnalystFinding, SummarizerOutput
+from app.core.language import Language
 
 
 async def run_summarizer(
@@ -18,10 +20,15 @@ async def run_summarizer(
     board_number: str | None,
     batch_number: str | None,
     findings: Sequence[AnalystFinding],
+    batch_context: BatchContext | None = None,
+    language: Language = Language.EN,
 ) -> SummarizerOutput:
-    system = prompts.summarizer_system_prompt()
+    system = prompts.summarizer_system_prompt(language)
     user = prompts.summarizer_user_prompt(
-        board_number=board_number, batch_number=batch_number, findings=findings
+        board_number=board_number,
+        batch_number=batch_number,
+        findings=findings,
+        batch_context=batch_context,
     )
     try:
         raw = await client.complete_json(system=system, user=user)

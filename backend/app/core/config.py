@@ -38,6 +38,37 @@ class Settings(BaseSettings):
     llm_model: str = "local-model"
     llm_api_key: str | None = None
     llm_timeout_s: int = 60
+    # Passed through as `reasoning_effort` when set, and omitted entirely when not, so an
+    # endpoint that has never heard of the field is unaffected. It exists because reasoning
+    # models are not interchangeable with plain ones under forced JSON output: Groq's
+    # `qwen/qwen3.6-27b` fails *every* `response_format: json_object` call with
+    # `json_validate_failed` and an empty generation until reasoning is turned off, while
+    # `openai/gpt-oss-120b` on the same provider is fine with it left on. Which value is right
+    # is a property of the model, so it is resolved per role alongside the model name.
+    llm_reasoning_effort: str | None = None
+
+    # Per-role overrides (`app.agents.llm_client.LLMRole`). The three tiers ask very different
+    # things of a model — the chat wants first-token latency, the report wants long-form
+    # synthesis, the analysis chain wants structured-output discipline — and they don't have to
+    # come from one endpoint any more: each role carries its own base_url/model/api_key, and
+    # every field left unset falls back to the `llm_*` value above, so a single-endpoint
+    # station keeps working with nothing but the globals set.
+    llm_chat_base_url: str | None = None
+    llm_chat_model: str | None = None
+    llm_chat_api_key: str | None = None
+    llm_chat_reasoning_effort: str | None = None
+    llm_analysis_base_url: str | None = None
+    llm_analysis_model: str | None = None
+    llm_analysis_api_key: str | None = None
+    llm_analysis_reasoning_effort: str | None = None
+    llm_report_base_url: str | None = None
+    llm_report_model: str | None = None
+    llm_report_api_key: str | None = None
+    llm_report_reasoning_effort: str | None = None
+    # Caps a single completion's generated tokens. A local CPU model writes a few tokens per
+    # second, so an unbounded answer is what turns a chat reply into a multi-minute wait;
+    # 800 is comfortably more than any answer this assistant needs to give.
+    llm_max_tokens: int = 800
 
     # Celery
     celery_broker_url: str = "redis://redis:6379/1"

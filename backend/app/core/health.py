@@ -147,26 +147,10 @@ def _llm_probe_request(
     raise ValueError(f"unknown provider: {provider}")
 
 
-async def check_llm(settings: Settings, db: AsyncSession) -> CheckResult:
-    """Pings the configured provider's model-listing endpoint (section 5.2) and reports actual
-    reachability — `openai_compatible` (local LM Studio/Ollama/vLLM by default) always has a
-    target URL, so it's only ever `ok`/`error`; the cloud providers additionally need an API
-    key opted in, so they report `not_configured` until one is set.
-    """
-    from app.settings.service import get_config_value, get_secret_config_value
-
-    provider = await get_config_value(db, "llm.provider", settings.llm_provider)
-    model = await get_config_value(db, "llm.model", settings.llm_model)
-    base_url = await get_config_value(db, "llm.base_url", settings.llm_base_url)
-    api_key = await get_secret_config_value(db, "llm.api_key") or settings.llm_api_key
-
-    if provider in ("anthropic", "google") and not api_key:
-        return CheckResult(
-            status="not_configured", detail=f"provider={provider}: no API key configured"
-        )
-
+async def _probe_endpoint(provider: str, base_url: str | None, api_key: str | None) -> CheckResult:
+    """One "list models" round trip against a single endpoint."""
     try:
-        url, headers = _llm_probe_request(provider, base_url, api_key)
+        url, headers = _llm_probe_request(provider, base_url or "", api_key)
     except ValueError as exc:
         return CheckResult(status="error", detail=str(exc))
 
@@ -174,15 +158,68 @@ async def check_llm(settings: Settings, db: AsyncSession) -> CheckResult:
         async with httpx.AsyncClient(timeout=_LLM_PROBE_TIMEOUT_S) as http_client:
             response = await http_client.get(url, headers=headers)
         if response.status_code >= 400:
-            return CheckResult(
-                status="error",
-                detail=f"provider={provider} model={model} http_status={response.status_code}",
-            )
-        return CheckResult(status="ok", detail=f"provider={provider} model={model} reachable")
+            return CheckResult(status="error", detail=f"http_status={response.status_code}")
+        return CheckResult(status="ok", detail="reachable")
     except httpx.HTTPError as exc:
+        return CheckResult(status="error", detail=f"unreachable: {exc}")
+
+
+async def check_llm(settings: Settings, db: AsyncSession) -> CheckResult:
+    """Pings the configured provider's model-listing endpoint (section 5.2) and reports actual
+    reachability — `openai_compatible` (local LM Studio/Ollama/vLLM by default) always has a
+    target URL, so it's only ever `ok`/`error`; the cloud providers additionally need an API
+    key opted in, so they report `not_configured` until one is set.
+
+    Since the three tiers may sit on different providers (`app.agents.llm_client.LLMRole`),
+    every role is resolved and probed, and the results are folded back into the single
+    `llm` field the health report has always exposed: the status is the worst of the three,
+    and the detail names each role with the model it resolved to. Roles sharing an endpoint
+    are probed once — the common single-endpoint station still costs exactly one request.
+    """
+    from app.agents.llm_client import LLM_ROLES, resolve_llm_connection
+    from app.settings.service import get_config_value, get_secret_config_value
+
+    provider = await get_config_value(db, "llm.provider", settings.llm_provider)
+
+    if provider in ("anthropic", "google"):
+        # These providers have no client implementation and no per-role split; they are still
+        # a single global endpoint, checked exactly as before.
+        api_key = await get_secret_config_value(db, "llm.api_key") or settings.llm_api_key
+        model = await get_config_value(db, "llm.model", settings.llm_model)
+        if not api_key:
+            return CheckResult(
+                status="not_configured", detail=f"provider={provider}: no API key configured"
+            )
+        result = await _probe_endpoint(provider, None, api_key)
         return CheckResult(
-            status="error", detail=f"provider={provider} model={model} unreachable: {exc}"
+            status=result.status, detail=f"provider={provider} model={model} {result.detail}"
         )
+
+    probes: dict[tuple[str | None, str | None], CheckResult] = {}
+    parts: list[str] = []
+    statuses: list[Status] = []
+    for role in LLM_ROLES:
+        connection = await resolve_llm_connection(db, settings, role)
+        if not connection.base_url or not connection.model:
+            parts.append(f"{role}: not configured")
+            statuses.append("not_configured")
+            continue
+        cache_key = (connection.base_url, connection.api_key)
+        if cache_key not in probes:
+            probes[cache_key] = await _probe_endpoint(
+                provider, connection.base_url, connection.api_key
+            )
+        result = probes[cache_key]
+        parts.append(f"{role}: {connection.model} {result.detail}")
+        statuses.append(result.status)
+
+    if "error" in statuses:
+        overall: Status = "error"
+    elif "ok" in statuses:
+        overall = "ok"
+    else:
+        overall = "not_configured"
+    return CheckResult(status=overall, detail=f"provider={provider} " + " | ".join(parts))
 
 
 async def build_health_report(settings: Settings, db: AsyncSession) -> HealthReport:

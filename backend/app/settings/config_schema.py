@@ -101,6 +101,30 @@ _VALIDATORS: dict[str, Callable[[str, Any], Any]] = {
     "llm.model": _non_empty_str,
     "llm.api_key": _secret_str,
     "llm.timeout_s": _positive_int,
+    # Sent as `reasoning_effort` when set, omitted when blank. Free-form on purpose: the
+    # accepted values differ per provider and per model (Groq's `qwen/qwen3.6-27b` takes only
+    # `none` or `default`, OpenAI's reasoning models take `low`/`medium`/`high`), and an enum
+    # here would go stale every time a provider ships a model.
+    "llm.reasoning_effort": _non_empty_str,
+    # Per-role endpoints (`app.agents.llm_client.LLMRole`). Each field falls back to the
+    # matching `llm.*` global when left unset, so these exist to let one tier diverge — a
+    # different model on the same endpoint, or a different provider entirely — without
+    # forcing the other two to be spelled out.
+    "llm.chat.base_url": _non_empty_str,
+    "llm.chat.model": _non_empty_str,
+    "llm.chat.api_key": _secret_str,
+    "llm.chat.reasoning_effort": _non_empty_str,
+    "llm.analysis.base_url": _non_empty_str,
+    "llm.analysis.model": _non_empty_str,
+    "llm.analysis.api_key": _secret_str,
+    "llm.analysis.reasoning_effort": _non_empty_str,
+    "llm.report.base_url": _non_empty_str,
+    "llm.report.model": _non_empty_str,
+    "llm.report.api_key": _secret_str,
+    "llm.report.reasoning_effort": _non_empty_str,
+    # Upper bound on a single completion's generated tokens — the chat agent's main lever
+    # against a local model rambling for minutes.
+    "llm.max_tokens": _positive_int,
     # Agent analysis policy and trigger criteria (FR-06)
     "agent_analysis_mode": lambda k, v: _enum(k, v, ("conditional", "always", "on_demand")),
     "agent_analysis_min_defect_count": _positive_int,

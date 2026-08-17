@@ -31,7 +31,12 @@ _WRITABLE_DIR_KEYS = {"reports_output_dir"}
 
 # Keys stored encrypted (FR-13, `SystemConfig.is_secret`) — cloud LLM API keys, never returned
 # in cleartext by GET /api/v1/settings/config.
-_SECRET_KEYS = {"llm.api_key"}
+_SECRET_KEYS = {
+    "llm.api_key",
+    "llm.chat.api_key",
+    "llm.analysis.api_key",
+    "llm.report.api_key",
+}
 
 
 def _ensure_writable_dir(path: Path) -> None:
