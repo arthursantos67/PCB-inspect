@@ -74,8 +74,9 @@ test("completes the Phase-1 golden path using the keyboard alone", async ({ page
 
   // --- Dashboard -> Inspections (batch list), open the batch, then filter by board number.
   // The batch level is reached by its row link, which is what keeps the drill-down keyboard
-  // operable now that the screen is batch-first ---
-  await page.getByRole("link", { name: "Inspections" }).focus();
+  // operable now that the screen is batch-first. Scoped to the "Primary" nav landmark since
+  // the dashboard also has an "All inspections" link whose accessible name contains this one ---
+  await page.getByLabel("Primary").getByRole("link", { name: "Inspections" }).focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL("/inspections");
 
