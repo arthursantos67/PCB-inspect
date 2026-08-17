@@ -11,7 +11,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analyses.service import create_baseline_analysis
-from app.models import Detection, InspectionImage, ModelVersion
+from app.models import Batch, Board, Detection, InspectionImage, ModelVersion
 from app.models.enums import DefectType, ImageSource, ImageStatus
 
 ACCOUNT = {
@@ -205,6 +205,152 @@ async def test_delete_session_owned_by_another_account_is_forbidden(client: Asyn
 
     response = await client.delete(
         f"/api/v1/chat/sessions/{session_id}", headers=_auth_headers(other_token)
+    )
+
+    assert response.status_code == 403
+
+
+# --- Attachments ---------------------------------------------------------------------------
+
+
+async def _make_inspection(db_session: AsyncSession) -> tuple[uuid.UUID, str, str]:
+    """An inspection linked to a real board/batch, so the attachment carries the labels the
+    chat screen puts on its chip.
+    """
+    batch = Batch(batch_number="BATCH-A")
+    db_session.add(batch)
+    await db_session.flush()
+    board = Board(batch_id=batch.id, board_number="BOARD-1")
+    db_session.add(board)
+    await db_session.flush()
+    image = InspectionImage(
+        board_id=board.id,
+        source=ImageSource.WATCH_FOLDER,
+        original_path="/tmp/board.jpg",
+        checksum_sha256=uuid.uuid4().hex,
+        status=ImageStatus.COMPLETED,
+    )
+    db_session.add(image)
+    await db_session.commit()
+    return image.id, batch.batch_number, board.board_number
+
+
+async def _new_session(client: AsyncClient, token: str) -> str:
+    response = await client.post("/api/v1/chat/sessions", json={}, headers=_auth_headers(token))
+    return response.json()["id"]
+
+
+async def test_attach_inspection_returns_it_with_its_labels(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    session_id = await _new_session(client, token)
+    inspection_id, batch_number, board_number = await _make_inspection(db_session)
+
+    response = await client.post(
+        f"/api/v1/chat/sessions/{session_id}/attachments",
+        json={"inspection_id": str(inspection_id)},
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["results"] == [
+        {
+            "inspection_id": str(inspection_id),
+            "batch_number": batch_number,
+            "board_number": board_number,
+        }
+    ]
+
+
+async def test_attached_inspection_shows_up_on_the_session_detail(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    session_id = await _new_session(client, token)
+    inspection_id, _batch_number, _board_number = await _make_inspection(db_session)
+    await client.post(
+        f"/api/v1/chat/sessions/{session_id}/attachments",
+        json={"inspection_id": str(inspection_id)},
+        headers=_auth_headers(token),
+    )
+
+    response = await client.get(
+        f"/api/v1/chat/sessions/{session_id}", headers=_auth_headers(token)
+    )
+
+    assert response.json()["attached_inspection_ids"] == [str(inspection_id)]
+
+
+async def test_attaching_the_same_inspection_twice_is_idempotent(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    session_id = await _new_session(client, token)
+    inspection_id, _batch_number, _board_number = await _make_inspection(db_session)
+    payload = {"inspection_id": str(inspection_id)}
+
+    await client.post(
+        f"/api/v1/chat/sessions/{session_id}/attachments",
+        json=payload,
+        headers=_auth_headers(token),
+    )
+    response = await client.post(
+        f"/api/v1/chat/sessions/{session_id}/attachments",
+        json=payload,
+        headers=_auth_headers(token),
+    )
+
+    assert len(response.json()["results"]) == 1
+
+
+async def test_attaching_an_unknown_inspection_returns_404(client: AsyncClient) -> None:
+    token = await _setup_account(client)
+    session_id = await _new_session(client, token)
+
+    response = await client.post(
+        f"/api/v1/chat/sessions/{session_id}/attachments",
+        json={"inspection_id": str(uuid.uuid4())},
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
+
+
+async def test_detaching_removes_the_attachment(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    session_id = await _new_session(client, token)
+    inspection_id, _batch_number, _board_number = await _make_inspection(db_session)
+    await client.post(
+        f"/api/v1/chat/sessions/{session_id}/attachments",
+        json={"inspection_id": str(inspection_id)},
+        headers=_auth_headers(token),
+    )
+
+    response = await client.delete(
+        f"/api/v1/chat/sessions/{session_id}/attachments/{inspection_id}",
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["results"] == []
+
+
+async def test_attachments_of_a_session_owned_by_another_account_are_forbidden(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    other_token = await _create_second_account_token(client, token)
+    session_id = await _new_session(client, token)
+    inspection_id, _batch_number, _board_number = await _make_inspection(db_session)
+
+    response = await client.post(
+        f"/api/v1/chat/sessions/{session_id}/attachments",
+        json={"inspection_id": str(inspection_id)},
+        headers=_auth_headers(other_token),
     )
 
     assert response.status_code == 403

@@ -15,16 +15,19 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.batches import service as batch_service
 from app.core.errors import ApiError
 from app.inspections.filters import InspectionFilters, apply_filters, order_by_clauses
-from app.knowledge.defects import DEFECT_KNOWLEDGE_BASE
+from app.knowledge.defects import knowledge_base
 from app.models import Analysis, Batch, Board, Detection, InspectionImage
 from app.models.enums import DefectType, ImageStatus
+from app.settings import service as settings_service
 
 _MAX_RESULTS = 20
+_SUMMARY_SNIPPET_CHARS = 400
 
 
 def _inspection_query(*entities: Any) -> Select[Any]:
@@ -82,7 +85,153 @@ async def search_analyses(db: AsyncSession, arguments: dict[str, Any]) -> dict[s
                     if analysis and analysis.disposition_recommendation
                     else None
                 ),
+                # The gist of what the analysis actually said, so a "what happened in this
+                # batch" question can be answered without a follow-up `get_analysis` call per
+                # board.
+                "summary": _snippet(analysis.executive_summary) if analysis else None,
                 "created_at": image.created_at.isoformat(),
+            }
+            for image, board, batch, analysis in rows
+        ],
+    }
+
+
+def _snippet(text: str | None, limit: int = _SUMMARY_SNIPPET_CHARS) -> str | None:
+    if not text:
+        return None
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "…"
+
+
+async def get_batch_summary(db: AsyncSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Everything about one batch as a whole: how many boards it holds, how far they got, how
+    many carry defects, the defect mix, and the boards that need attention most. This is what
+    makes "how did batch X go?" answerable in one call instead of a search plus one
+    `get_analysis` per board.
+    """
+    batch_number = str(arguments.get("batch_number") or "").strip()
+    if not batch_number:
+        return {"error": "batch_number is required"}
+
+    aggregate = await batch_service.get_batch(db, batch_number)
+    if aggregate is None:
+        return {"error": f"No batch found with number '{batch_number}'"}
+
+    worst_boards_stmt = (
+        _inspection_query(InspectionImage, Board, Analysis)
+        .where(Batch.batch_number == batch_number, Analysis.id.is_not(None))
+        .order_by(InspectionImage.created_at.desc())
+        .limit(_MAX_RESULTS)
+    )
+    board_rows = (await db.execute(worst_boards_stmt)).all()
+
+    return {
+        "batch_number": aggregate.batch_number,
+        "board_count": aggregate.board_count,
+        "completed_count": aggregate.completed_count,
+        "boards_with_defects": aggregate.boards_with_defects,
+        "defect_rate_percent": round(aggregate.defect_rate * 100, 1),
+        "total_defects": aggregate.defect_count,
+        "defects_by_type": [
+            {"defect_type": defect_type.value, "count": count}
+            for defect_type, count in sorted(
+                aggregate.defect_counts.items(), key=lambda item: -item[1]
+            )
+        ],
+        "aggregated_severity": aggregate.severity.value if aggregate.severity else None,
+        "status": aggregate.status.value,
+        "first_activity": aggregate.created_at.isoformat(),
+        "last_activity": aggregate.last_activity_at.isoformat(),
+        "boards": [
+            {
+                "inspection_id": str(image.id),
+                "board_number": board.board_number if board is not None else None,
+                "status": image.status.value,
+                "severity_max": (
+                    analysis.severity_max.value if analysis and analysis.severity_max else None
+                ),
+                "summary": _snippet(analysis.executive_summary) if analysis else None,
+            }
+            for image, board, analysis in board_rows
+        ],
+    }
+
+
+async def list_batches(db: AsyncSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The most recently active batches with their headline numbers — the entry point for
+    "which batches do we have / which one went worst" questions.
+    """
+    limit = min(int(arguments.get("limit") or 10), _MAX_RESULTS)
+    _total, aggregates = await batch_service.list_batches(db, limit=limit)
+    return {
+        "count": len(aggregates),
+        "results": [
+            {
+                "batch_number": aggregate.batch_number,
+                "board_count": aggregate.board_count,
+                "boards_with_defects": aggregate.boards_with_defects,
+                "total_defects": aggregate.defect_count,
+                "aggregated_severity": (
+                    aggregate.severity.value if aggregate.severity else None
+                ),
+                "status": aggregate.status.value,
+                "last_activity": aggregate.last_activity_at.isoformat(),
+            }
+            for aggregate in aggregates
+        ],
+    }
+
+
+async def search_analysis_text(db: AsyncSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Free-text search across what the analyses actually *said* — executive summaries and
+    per-defect descriptions/causes/solutions (the operator must be able to ask about the
+    content of a specific board's analysis, not just its counts).
+
+    Every completed analysis is searchable the moment it is written, since this reads the
+    `analysis` table directly rather than a separately maintained index.
+    """
+    query = str(arguments.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required"}
+    limit = min(int(arguments.get("limit") or 10), _MAX_RESULTS)
+
+    pattern = f"%{query}%"
+    stmt = (
+        _inspection_query(InspectionImage, Board, Batch, Analysis)
+        .where(
+            or_(
+                Analysis.executive_summary.ilike(pattern),
+                cast(Analysis.per_defect, String).ilike(pattern),
+            )
+        )
+        .order_by(InspectionImage.created_at.desc())
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    return {
+        "query": query,
+        "count": len(rows),
+        "results": [
+            {
+                "inspection_id": str(image.id),
+                "batch_number": batch.batch_number if batch is not None else None,
+                "board_number": board.board_number if board is not None else None,
+                "severity_max": (
+                    analysis.severity_max.value if analysis and analysis.severity_max else None
+                ),
+                "summary": _snippet(analysis.executive_summary) if analysis else None,
+                "matching_defects": [
+                    {
+                        "detection_id": entry.get("detection_id"),
+                        "severity": entry.get("severity"),
+                        "description": _snippet(entry.get("description")),
+                    }
+                    for entry in (analysis.per_defect or [])
+                    if query.lower() in str(entry).lower()
+                ][:5],
             }
             for image, board, batch, analysis in rows
         ],
@@ -198,8 +347,11 @@ async def get_defect_stats(db: AsyncSession, arguments: dict[str, Any]) -> dict[
 
 
 async def get_defect_knowledge(db: AsyncSession, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Static knowledge base on the 6 defect types (PRD 5.4) — no DB access needed, but kept
-    to the same `(db, arguments) -> dict` executor signature as every other tool.
+    """Static knowledge base on the 6 defect types (PRD 5.4).
+
+    Served in the station's language (issue #50): the catalogue is hand written in both, so
+    handing the model Portuguese reference material for a Portuguese station beats making it
+    translate English on the fly.
     """
     defect_type_raw = arguments.get("defect_type")
     try:
@@ -208,7 +360,7 @@ async def get_defect_knowledge(db: AsyncSession, arguments: dict[str, Any]) -> d
         allowed = ", ".join(member.value for member in DefectType)
         return {"error": f"'{defect_type_raw}' is not one of the known defect types: {allowed}"}
 
-    entry = DEFECT_KNOWLEDGE_BASE[defect_type]
+    entry = knowledge_base(await settings_service.get_language(db))[defect_type]
     return {
         "defect_type": defect_type.value,
         "description": entry.description,
@@ -223,6 +375,9 @@ ToolExecutor = Callable[[AsyncSession, dict[str, Any]], Awaitable[dict[str, Any]
 TOOL_EXECUTORS: dict[str, ToolExecutor] = {
     "search_analyses": search_analyses,
     "get_analysis": get_analysis,
+    "get_batch_summary": get_batch_summary,
+    "list_batches": list_batches,
+    "search_analysis_text": search_analysis_text,
     "get_defect_stats": get_defect_stats,
     "get_defect_knowledge": get_defect_knowledge,
 }
@@ -283,6 +438,71 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "inspection_id": {"type": "string", "description": "The inspection's UUID."},
                 },
                 "required": ["inspection_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_batch_summary",
+            "description": (
+                "Everything about one batch as a whole: how many boards it has, how many are "
+                "done, how many carry defects, the defect mix, its aggregated severity, and a "
+                "one-line summary per board. Use this for any question about a specific batch."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "batch_number": {"type": "string", "description": "Exact batch number."},
+                },
+                "required": ["batch_number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_batches",
+            "description": (
+                "The most recently active batches with their board counts, defect counts and "
+                "aggregated severity. Use it when the operator asks which batches exist or "
+                "which one went worst, or to find a batch number before calling "
+                "get_batch_summary."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": f"Max batches to return (default 10, max {_MAX_RESULTS}).",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_analysis_text",
+            "description": (
+                "Free-text search over what the AI analyses actually said (executive summaries "
+                "and per-defect descriptions, causes and solutions). Use it when the operator "
+                "asks about the *content* of analyses, e.g. 'which boards mentioned solder "
+                "bridging' or 'what did we say about re-drilling'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Words or phrase to look for in the analysis text.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": f"Max results (default 10, max {_MAX_RESULTS}).",
+                    },
+                },
+                "required": ["query"],
             },
         },
     },

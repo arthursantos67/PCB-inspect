@@ -19,8 +19,11 @@ from app.chat import service
 from app.chat.agent import run_turn
 from app.chat.errors import ChatAgentUnavailableError
 from app.chat.schemas import (
+    ChatAttachmentCreate,
+    ChatAttachmentOut,
     ChatMessageCreate,
     ChatMessageOut,
+    ChatSessionAttachments,
     ChatSessionCreate,
     ChatSessionDetail,
     ChatSessionOut,
@@ -75,6 +78,7 @@ async def get_chat_session(
         id=session.id,
         title=session.title,
         context_analysis_id=session.context_analysis_id,
+        attached_inspection_ids=list(session.attached_inspection_ids),
         created_at=session.created_at,
         updated_at=session.updated_at,
         messages=[ChatMessageOut.model_validate(m) for m in messages],
@@ -90,6 +94,58 @@ async def delete_chat_session(
     await service.delete_session(db, session_id, user_id=current_user.id)
 
 
+def _attachments_out(
+    rows: list[tuple[uuid.UUID, str | None, str | None]],
+) -> ChatSessionAttachments:
+    return ChatSessionAttachments(
+        results=[
+            ChatAttachmentOut(inspection_id=image_id, batch_number=batch, board_number=board)
+            for image_id, batch, board in rows
+        ]
+    )
+
+
+@router.get("/{session_id}/attachments", response_model=ChatSessionAttachments)
+async def list_session_attachments(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatSessionAttachments:
+    session = await service.get_owned_session(db, session_id, user_id=current_user.id)
+    return _attachments_out(await service.list_attachments(db, session))
+
+
+@router.post(
+    "/{session_id}/attachments",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ChatSessionAttachments,
+)
+async def attach_session_inspection(
+    session_id: uuid.UUID,
+    payload: ChatAttachmentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatSessionAttachments:
+    """Pins an inspection's analysis to the conversation so every following turn is answered
+    with that board's data in context.
+    """
+    session = await service.get_owned_session(db, session_id, user_id=current_user.id)
+    session = await service.attach_inspection(db, session, payload.inspection_id)
+    return _attachments_out(await service.list_attachments(db, session))
+
+
+@router.delete("/{session_id}/attachments/{inspection_id}", response_model=ChatSessionAttachments)
+async def detach_session_inspection(
+    session_id: uuid.UUID,
+    inspection_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatSessionAttachments:
+    session = await service.get_owned_session(db, session_id, user_id=current_user.id)
+    session = await service.detach_inspection(db, session, inspection_id)
+    return _attachments_out(await service.list_attachments(db, session))
+
+
 def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
@@ -99,7 +155,7 @@ async def _message_stream(
 ) -> AsyncIterator[str]:
     await service.append_user_message(db, session, content)
 
-    llm_client = await build_llm_client(db)
+    llm_client = await build_llm_client(db, role="chat")
     if llm_client is None:
         message = await service.append_assistant_message(
             db, session, content=_UNAVAILABLE_MESSAGE, tool_calls=None
@@ -115,7 +171,7 @@ async def _message_stream(
             llm_client,
             session_id=session.id,
             context_analysis_id=session.context_analysis_id,
-            user_content=content,
+            attached_inspection_ids=list(session.attached_inspection_ids),
         ):
             if event["type"] == "done":
                 final_event = event

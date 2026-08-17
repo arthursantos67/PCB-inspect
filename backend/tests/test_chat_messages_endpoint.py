@@ -71,7 +71,13 @@ class _StubChatLLMClient:
 
 
 def _patch_llm_client(monkeypatch: pytest.MonkeyPatch, client: object | None) -> None:
-    async def _fake_build_llm_client(db: AsyncSession) -> object | None:
+    async def _fake_build_llm_client(
+        db: AsyncSession, settings: object = None, *, role: str | None = None
+    ) -> object | None:
+        # The chat must ask for its own tier, not the shared default: a station whose chat
+        # model is a fast hosted one and whose analysis model is a slow local one would
+        # otherwise silently run the operator's conversation on the wrong endpoint.
+        assert role == "chat"
         return client
 
     monkeypatch.setattr(chat_router_module, "build_llm_client", _fake_build_llm_client)

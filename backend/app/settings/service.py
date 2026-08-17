@@ -18,6 +18,7 @@ from app.audit.service import record_audit
 from app.core.config import get_settings
 from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.errors import ApiError
+from app.core.language import LANGUAGE_CONFIG_KEY, Language, coerce_language
 from app.models import SystemConfig
 from app.settings.config_schema import validate_config_value
 
@@ -61,6 +62,18 @@ async def get_config_value(db: AsyncSession, key: str, default: Any = None) -> A
     if config is None:
         return default
     return config.value
+
+
+async def get_language(db: AsyncSession) -> Language:
+    """The station's language (issue #50), for anything generated without a user in context.
+
+    The agent worker calls this before writing an analysis and the reports service before
+    defaulting a report's language, so a station switched to Portuguese produces Portuguese
+    text everywhere without the caller having to carry the setting around.
+    """
+    return coerce_language(
+        await get_config_value(db, LANGUAGE_CONFIG_KEY, get_settings().default_language)
+    )
 
 
 async def get_secret_config_value(db: AsyncSession, key: str) -> str | None:
