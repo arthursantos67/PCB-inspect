@@ -52,7 +52,7 @@ Backend:
 - Native launcher process that starts the backend stack and reports readiness (FR-20)
 - Analysis and detection validation/feedback
 - Report generation and export (CSV, XLSX, PDF) to local disk
-- Feedback dataset export in YOLO format (data flywheel) and quality alerts
+- Quality alerts
 - Model version management with golden-set evaluation, dynamic configuration, audit trail, health check, and OpenAPI documentation
 
 Frontend:
@@ -172,10 +172,12 @@ A failure at any stage moves the record to status `FAILED` with the reason persi
 
 Two distinct moments in the software's lifecycle are kept strictly separate:
 
-- **One-time technical setup** — installing the container runtime and the PCB-Inspect stack on the inspection-station machine (section 14.1). Performed once by a technical installer (IT staff or the deploying integrator); not part of the daily operator's workflow.
+- **One-time technical setup** — installing the container runtime, then running the PCB-Inspect installer for the machine's OS (section 14.1). Performed once by a technical installer (IT staff or the deploying integrator); not part of the daily operator's workflow.
 - **Daily operation** — the operator double-clicks the PCB-Inspect application icon. A thin native launcher, packaged per OS, checks whether the backend services are running, starts them silently if not, waits for `/health` to report ready, and opens the interface in its own application window — no browser chrome, no address bar, no visible terminal.
 
-The launcher owns process lifecycle for the local stack (start, stop, status, and surfacing startup errors) but does not replace any backend component: PostgreSQL, Redis, and the Celery workers keep running exactly as described in section 3.3, via the same Docker Compose stack, supervised by the launcher instead of by a manually typed command. Requirement: FR-20.
+The installer carries the application only; the stack it needs is assembled by the launcher on its first run, so the one-time setup has no configuration step of its own. The launcher creates a per-user install directory, writes the Docker Compose file it carries embedded in its binary, generates `.env` with randomly generated application secrets, downloads the model weight from its published release asset, and pulls the container images tagged with the launcher's own version. Nothing is compiled or built on the target machine, and no file is edited by hand at any point.
+
+The launcher owns process lifecycle for the local stack (provisioning, start, stop, status, and surfacing startup errors) but does not replace any backend component: PostgreSQL, Redis, and the Celery workers keep running exactly as described in section 3.3, via the same Docker Compose stack, supervised by the launcher instead of by a manually typed command. Requirement: FR-20.
 
 ---
 
@@ -212,7 +214,8 @@ The model was validated locally (inference on dataset samples with 0.85–0.92 c
 The model was trained on an academic dataset (Kaggle PCB Defects): bare boards (no mounted components), simulated defects, and a limited variety of designs, captured under controlled lighting conditions. The metrics in section 4.1 hold for that distribution — against a real production-line camera (different optics, lighting, and board designs), performance is unpredictable without domain adaptation. This document treats that limitation as a design premise, not a footnote:
 
 - Every metric shown on the platform declares the model version and the reference set that produced it (RV-05, FR-12).
-- Per-detection human feedback (FR-10) and labeled dataset export (FR-18) exist specifically to enable adapting the model to real data from the deployment environment.
+- Per-detection human feedback (FR-10) exists specifically so the model's behaviour on real deployment-environment data is measured rather than assumed.
+- Weights trained elsewhere (section 4.1's notebook) can be brought in by uploading the `.pt` file (FR-12), so adapting the model to a real line never requires touching the installation.
 - Activating new weights requires a reproducible evaluation against a golden set, run by the system itself (FR-12), preventing silent regressions.
 
 ---
@@ -289,7 +292,7 @@ The system shall ingest PCB images primarily by reading them directly from local
 
 Batch and board identification follows a directory convention by default: each immediate subdirectory of the watch root is treated as one batch (`batch_number` = subdirectory name), and each image file within it as one board (`board_number` derived from the filename). The convention is configurable (FR-13) for cameras that produce a different layout.
 
-A secondary import path remains available for ad hoc images that don't already sit under the watch root — e.g., a stray file dragged into the browser from elsewhere on the machine. This path does accept file bytes (the browser has no other way to read a file outside the watch root the backend already has permission to scan), unlike the primary flow, which never copies bytes and only ever references the original path.
+There is no upload path. Images that don't sit under the current watch root are brought in by pointing the watch root at the folder that holds them (or by a one-off scan of it) — the operator picks that folder from the UI at any time, and the backend, running on the same machine, reads the images where they are. A browser upload was previously offered as a secondary route for stray files; it was removed because it forced a per-file selection that couldn't take a folder, copied bytes the backend could already read, and gave the operator two different ways to do one thing.
 
 Accepted formats: JPG, PNG, TIFF, BMP. Invalid/corrupted files are rejected with a descriptive error; in watch mode, the failure and its reason are recorded against the file's path in the database — the file itself is never moved, renamed, or deleted (section 3.5).
 
@@ -328,21 +331,34 @@ The system shall expose persistent chat sessions per local account. Messages are
 
 The operator shall be able to validate or reject an analysis, with an optional comment, and to record a board's final disposition (`approved`, `rework`, `discarded`). Both actions are audited (FR-16) and feed system precision metrics (rate of validated vs. rejected analyses).
 
-Additionally, the operator shall be able to record **per-detection** feedback — marking each bounding box as `confirmed` or `false_positive` — and **annotate undetected defects** by drawing a bbox + class directly in the image viewer. This detection-level feedback feeds the model's real-world precision metrics and is the input for dataset export (FR-18).
+Additionally, the operator shall be able to record **per-detection** feedback — marking each bounding box as `confirmed` or `false_positive` — and **annotate undetected defects** by drawing a bbox + class directly in the image viewer. This detection-level feedback is how the model's real-world precision is measured on the boards this installation actually sees, rather than on the dataset it was trained on (section 4.3).
 
 ### FR-11 Reports and Export
 
-The system shall generate reports on demand: **individual** (one analysis, PDF), **consolidated** (search filters, CSV/XLSX/PDF), and **executive summary** (period aggregates, PDF). Generation is asynchronous via Celery; the resulting file is written to a local, configurable reports directory and indexed in the database so it can be found and re-opened later from the interface.
+The system shall generate reports on demand: **individual** (one board, PDF/CSV/XLSX), **consolidated** (a batch, optionally narrowed to selected boards and to the search filters, PDF/CSV/XLSX), and **executive summary** (period aggregates, PDF). Generation is asynchronous via Celery; the resulting file is written to a local, configurable reports directory and indexed in the database so it can be found and re-opened later from the interface.
+
+**Scope of a request.** Individual and consolidated reports are addressed by picking an already processed batch and then the board or boards inside it, never by typing a name. Which inspections a consolidated report covers is resolved by the same filter code that serves `GET /api/v1/inspections`, so a report can never describe a different set of boards than the search screen does for the same filters.
+
+**Content.** Every format is written from one shared report document, so the spreadsheet and the PDF can never disagree about the same request.
+
+- **CSV/XLSX** carry one row per reported defect occurrence, not one per board: batch, board, occurrence number within the board, defect class, severity, detector confidence, position in the image, review status, source, the recommended decision and the operator's recorded decision with its justification and author, plus the analysis text written for that occurrence. Boards with no reported defect still get a row, so a scope is never silently shorter than it looks.
+- **PDF** opens with an executive summary, carries a clickable table of contents and PDF bookmarks for in-document navigation, and reports defect frequency across the whole batch rather than only the board in hand: a class seen on one board out of many is presented as an isolated occurrence, a class recurring on a large share of the boards is presented as possible evidence of something shared upstream, always as a reading of the counts and never as a proven cause. Each occurrence is numbered and cited by its own defect class, position and confidence, so two occurrences of the same class never read identically. The detections table (defect type, confidence, review, source) is kept.
+
+**Narrative.** The analytical prose (executive summary, one note per defect class, recommended actions) is written once per report by the configured analysis model, which is given the computed counts as facts and no room to invent one. It is also given the analyses already stored for the boards in scope (board summaries and, per defect class, what was observed, the probable causes and the solutions proposed when the board was inspected), deduplicated with the number of boards carrying each text, so the report synthesises the conclusions the system already reached instead of forming a separate opinion over the same rows. When no model is reachable, or its answer does not parse, the same figures are rendered from templates: an unreachable model degrades the wording, never the report. Per-board analysis text already stored by the agent chain is reproduced as recorded.
+
+**Language.** The requester chooses Portuguese or English per report. Titles, tables, the executive summary and the report-time analysis follow that choice; analysis text already persisted in the database is reproduced verbatim in the language it was written in, never machine-translated at print time. Reports contain no em dashes or en dashes.
 
 ### FR-12 Model Version Management with Golden-Set Evaluation
 
-The operator shall be able to register new weight versions (pointing at a local `.pt` file), list versions, and activate a version. Registering new weights triggers an **automatic evaluation against the reference test set (golden set)** — images and labels versioned locally alongside the application data; the metrics persisted in `ModelVersion.metrics` (mAP@50, mAP@50-95, per class) are **computed by the system itself, never self-reported**. Activation is blocked while the evaluation is incomplete, and when mAP@50 falls below the floor (NFR-05), unless the operator provides an explicit, audited override.
+The operator shall be able to register new weight versions, list versions, and activate a version. Weights arrive by **uploading the `.pt` file** the training notebook produced (section 4.1): the file is copied into the application's own storage, because the folder the browser downloaded it into is not somewhere the active model can keep pointing at months later. The same registration is also reachable by pointing at a path already on the machine, for seeding and scripted installs. Both routes converge on the same gate, so no version reaches production without passing it.
+
+Registering new weights triggers an **automatic evaluation against the reference test set (golden set)** — images and labels versioned locally alongside the application data; the metrics persisted in `ModelVersion.metrics` (mAP@50, mAP@50-95, per class) are **computed by the system itself, never self-reported**. Activation is blocked while the evaluation is incomplete, and when mAP@50 falls below the floor (NFR-05), unless the operator provides an explicit, audited override.
 
 Only one version is active at a time; switching reloads the inference worker without API downtime (rolling worker restart). Every detection references the version that produced it (RV-05).
 
 ### FR-13 Dynamic System Configuration
 
-The operator shall be able to read and change at runtime: confidence thresholds (RV-03), LLM configuration (section 5.2), the agent analysis policy (`agent_analysis_mode` and its criteria, FR-06), quality alert thresholds (FR-19), the watch root path and its batch/board naming convention (FR-03), data retention, and the reports/exports output directory. Sensitive values (cloud LLM API keys) are stored encrypted and never returned in cleartext.
+The operator shall be able to read and change at runtime: confidence thresholds (RV-03), LLM configuration (section 5.2), the agent analysis policy (`agent_analysis_mode` and its criteria, FR-06), quality alert thresholds (FR-19), the watch root path and its batch/board naming convention (FR-03), data retention, and the reports output directory. Sensitive values (cloud LLM API keys) are stored encrypted and never returned in cleartext.
 
 ### FR-14 Real-Time Events (SSE)
 
@@ -359,13 +375,13 @@ Sensitive actions generate an immutable `AuditLog` record: login, configuration 
 
 ### FR-17 Data Retention
 
-Analyses, detections, and image references shall be retained for at least **2 years** (configurable). A periodic Celery task (beat) archives/purges records past retention — including old generated reports and dataset exports past their own retention window — with an audit record of the purge. Original camera-captured files on disk are never touched by retention; only the application's own records and derived artifacts are affected.
+Analyses, detections, and image references shall be retained for at least **2 years** (configurable). A periodic Celery task (beat) archives/purges records past retention — including old generated reports past their own retention window — with an audit record of the purge. Original camera-captured files on disk are never touched by retention; only the application's own records and derived artifacts are affected.
 
-### FR-18 Feedback Dataset Export (Data Flywheel)
+### FR-18 Feedback Dataset Export (Data Flywheel): removed
 
-The system shall export, on demand, a labeled dataset in **YOLO format** composed of: images with confirmed detections (labels preserved), false-positive corrections (labels removed), and manual annotations of undetected defects (FR-10). Filters: period, defect types, and review status. The package — a ZIP with `images/`, `labels/`, and a JSON manifest (statistics, applied filters, source model version) — is generated asynchronously and written to the local exports directory, indexed for later retrieval.
+**Withdrawn.** The requirement described exporting a labeled YOLO dataset from operator feedback so the model could be retrained on real deployment data. It was implemented and then removed: the export is only useful as the input to a training run, training needs a GPU an inspection station has no reason to have, and the operator who does have one already trains from the notebook (section 4.1) against its own dataset. What the screen actually offered day to day was a ZIP nobody on that machine could consume.
 
-This requirement closes the continuous-improvement loop: retraining stays external to the software (section 17), but the labeled input from real deployment-environment data comes out ready — this is what makes the limitation in section 4.3 addressable over time.
+The number is left in place rather than reused, so that later requirements keep their identifiers. What replaced it: the training notebook is linked from the AI model screen (FE-11), and the weights it produces come back through the upload path in FR-12. Feedback itself (FR-10) is unaffected and still recorded per detection.
 
 ### FR-19 Quality Alerts
 
@@ -374,6 +390,8 @@ The system shall monitor the defect rate per batch and per time window against c
 ### FR-20 Native Launcher and Zero-Command Startup
 
 The system shall ship a native launcher application (section 3.8) that starts the backend stack if it is not already running, waits for it to report healthy, and opens the interface directly — without the operator ever typing a command, opening a terminal, or navigating a browser manually. The launcher displays a loading state while the backend starts and an actionable error state if startup fails (e.g., container runtime not installed or not running).
+
+The launcher shall be distributed as an installable application per supported OS (Windows: `.exe`/`.msi`; Linux: `.deb`/`.AppImage`), and shall provision its own installation on first run: install directory, Compose file, generated `.env` with random secrets, model weight download, and image pull, each surfaced as its own progress or error state. Provisioning shall be idempotent and non-destructive — an existing `.env` keeps the operator's values across upgrades — and shall be skipped entirely when the launcher is started against a directory someone else manages (a source checkout). An uninstall shall remove the application without removing inspection data, reports, the database volume, or `.env`.
 
 ---
 
@@ -410,7 +428,7 @@ Screen with combinable filters (defect type, batch, board, dates, status, severi
 
 Because the interface runs inside the native launcher (section 3.8), the watch root directory is configured through a real OS folder-picker dialog — the operator browses to and selects the directory; nothing is typed. A manual **path field** remains available as a fallback for scripted or advanced setups; when used, the backend — which runs on the same machine and has filesystem access — validates that the path exists and is readable before accepting it.
 
-The ingestion screen shows live watch-mode status (watching / paused, files discovered), a "scan directory now" action for a one-off path, and a small drag-and-drop area for importing a handful of stray files that aren't already under the watch root (FR-03). Real-time processing status tracking (queue → detection → analysis → completed) as the files move through the pipeline.
+The ingestion screen shows live watch-mode status (watching / paused, files discovered), lets the operator choose or change the watched folder through the same picker, and offers a "scan now" action that runs the scan immediately instead of waiting for the next poll (FR-03). Real-time processing status tracking (queue → detection → analysis → completed) as the files move through the pipeline.
 
 ### FE-06 Chat with AI Agent
 
@@ -420,12 +438,14 @@ Conversation interface with a session history sidebar, streaming responses, cont
 
 Screen to request reports (individual, consolidated, executive summary), track generation, and open the resulting local file (or reveal it in the reports folder). List of previously generated reports, subject to the retention window configured in FR-13/FR-17.
 
+The scope of a report is picked, not typed: a dropdown of already processed batches, then the board (individual) or the boards (consolidated, with the whole batch as the default when none is ticked) inside the chosen batch. The requester also picks the format allowed for that type and the report language (Portuguese or English), both shown back in the report list. Downloading gives visible feedback: the button reports that the file is being prepared, is disabled while it is, and confirms when the file has been saved, with the same state announced to screen readers.
+
 ### FE-08 Settings Area
 
 - **Accounts** — add, rename, remove local accounts, change passwords; no role concept (FR-02).
 - **Ingestion** — watch root path, batch/board naming convention, one-off scan trigger (FR-03, FE-05).
 - **Detection & Analysis** — confidence thresholds, agent analysis policy, LLM provider (local vs. cloud, with the disclosure notice from section 5.2), quality alert thresholds.
-- **Models** — weight versions, golden-set evaluation results, activation.
+- **Models** — upload a new `best.pt` to swap the model, weight versions, golden-set evaluation results, activation (FR-12).
 - **Audit** — audit trail with filters.
 
 ### FE-09 Real-Time Updates
@@ -435,6 +455,12 @@ The frontend subscribes to the SSE stream (FR-14) and updates the dashboard, lis
 ### FE-10 Accessibility and Responsiveness
 
 Responsive interface (desktop and tablet), keyboard-navigable, with adequate contrast, text labels for color indicators (defect classes), and ARIA roles on the interactive elements of the image viewer.
+
+### FE-11 AI Model Screen
+
+A screen that answers "what is the thing making these calls?" without the operator opening the notebook or reading this document: the version in production right now with the metrics the system measured for it, the six defect classes it can detect and the fact that everything outside that list is invisible to it, how the shipped weights were trained (architecture, dataset, resolution, epochs, resulting metrics), and where the model is weaker than those metrics suggest (section 4.3). It links out to the training notebook (section 4.1) for anyone who wants to train their own weights, and to Settings > Models for bringing the result back in.
+
+This screen replaced the dataset-export screen of the withdrawn FR-18.
 
 ---
 
@@ -520,7 +546,7 @@ Responsive interface (desktop and tablet), keyboard-navigable, with adequate con
 ### NFR-03 Availability and Recovery
 
 - Failure recovery ≤ 15 min: containers with automatic restart, Celery tasks with `acks_late` (a task in progress on a dead worker returns to the queue).
-- Automated local backup of the PostgreSQL database and the app-data directory (annotated images, reports, exports) — original camera-captured files are the camera software's responsibility, not this system's.
+- Automated local backup of the PostgreSQL database and the app-data directory (annotated images, reports, uploaded weights) — original camera-captured files are the camera software's responsibility, not this system's.
 
 ### NFR-04 Security
 
@@ -570,7 +596,6 @@ Responsive interface (desktop and tablet), keyboard-navigable, with adequate con
 - `ManualAnnotation`
 - `ChatSession` / `ChatMessage`
 - `Report`
-- `DatasetExport`
 - `QualityAlert`
 - `ModelVersion`
 - `SystemConfig`
@@ -614,7 +639,7 @@ Unique constraint: `(batch_id, board_number)`.
 |---|---|---|
 | `id` | UUID | PK |
 | `board_id` | FK → Board (nullable) | — |
-| `source` | Enum | `watch_folder` \| `directory_scan` \| `manual_import` |
+| `source` | Enum | `watch_folder` \| `directory_scan` (`manual_import` is legacy: the upload path was removed, see FR-03) |
 | `original_path` | Varchar | Absolute local filesystem path to the camera-captured file; never copied |
 | `annotated_path` | Varchar (nullable) | Local filesystem path to the generated annotated image (app-data directory) |
 | `checksum_sha256` | Char(64) | Integrity and deduplication |
@@ -714,18 +739,6 @@ Unique constraint: `(batch_id, board_number)`.
 | `requested_by` | FK → User | — |
 | `created_at` | Timestamptz | Subject to the retention window (FR-17) |
 
-#### DatasetExport
-
-| Field | Type | Notes |
-|---|---|---|
-| `id` | UUID | PK |
-| `filters` | JSONB | Period, classes, review status (FR-18) |
-| `status` | Enum | `PENDING` \| `COMPLETED` \| `FAILED` |
-| `manifest` | JSONB | Image/label counts, source model version |
-| `file_path` | Varchar (nullable) | Local filesystem path of the ZIP |
-| `requested_by` | FK → User | — |
-| `created_at` | Timestamptz | Subject to the retention window (FR-17) |
-
 #### QualityAlert
 
 | Field | Type | Notes |
@@ -818,7 +831,6 @@ Inspections:
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | `POST` | `/api/v1/inspections/scan` | Trigger a one-off scan of a given local directory path → 202 | Auth |
-| `POST` | `/api/v1/inspections/import` | Import a small number of ad hoc files by upload (files not already under the watch root) → 202 | Auth |
 | `GET` | `/api/v1/inspections` | Paginated listing with filters (section 11.3) | Auth |
 | `GET` | `/api/v1/inspections/{id}` | Detail: status, detections, analysis | Auth |
 | `GET` | `/api/v1/inspections/{id}/image?variant=original\|annotated` | Serves the image directly from local disk | Auth |
@@ -860,13 +872,10 @@ Reports:
 | `GET` | `/api/v1/reports` | List generated reports | Auth |
 | `GET` | `/api/v1/reports/{id}/download` | Streams the file from local disk | Auth |
 
-Dataset and alerts:
+Alerts:
 
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| `POST` | `/api/v1/dataset-exports` | Request a YOLO export with filters (FR-18) → 202 | Auth |
-| `GET` | `/api/v1/dataset-exports` | List exports with status and manifest | Auth |
-| `GET` | `/api/v1/dataset-exports/{id}/download` | Streams the ZIP from local disk | Auth |
 | `GET` | `/api/v1/alerts?acknowledged=` | List quality alerts | Auth |
 | `POST` | `/api/v1/alerts/{id}/ack` | Acknowledge an alert | Auth |
 
@@ -875,7 +884,8 @@ Settings:
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | `GET`, `PATCH` | `/api/v1/settings/config` | Read/change dynamic configuration | Auth |
-| `GET`, `POST` | `/api/v1/settings/models` | List/register model versions (registration triggers golden-set evaluation) | Auth |
+| `GET`, `POST` | `/api/v1/settings/models` | List/register model versions from a local path (registration triggers golden-set evaluation) | Auth |
+| `POST` | `/api/v1/settings/models/upload` | Upload a `.pt` weights file (multipart) and register it as a version (FR-12) | Auth |
 | `GET` | `/api/v1/settings/models/{id}/evaluation` | Golden-set evaluation status/result | Auth |
 | `POST` | `/api/v1/settings/models/{id}/activate` | Activate a version (reloads workers; blocked without evaluation, RN-10) | Auth |
 | `GET` | `/api/v1/settings/audit` | Audit trail with filters | Auth |
@@ -982,6 +992,7 @@ Real time:
 | Ingestion Settings & Monitor | `/ingestion` |
 | AI Chat | `/chat` (and `/chat/{sessionId}`) |
 | Reports | `/reports` |
+| AI Model | `/model` |
 | Settings — Accounts | `/settings/accounts` |
 | Settings — Detection & Analysis | `/settings/detection` |
 | Settings — Models | `/settings/models` |
@@ -1021,7 +1032,7 @@ All routes beyond `/login` require an authenticated local session; there is no p
 - No role hierarchy — any authenticated local account can perform any action (section 2.2); the only per-resource check is ownership for private data like chat sessions.
 - Cloud LLM API keys (when opted into, section 5.2) encrypted at rest (Fernet/AES-GCM with a key from env); the API exposes only `configured` + the last 4 characters.
 - Immutable audit trail for configuration changes, model activation, analysis review, board disposition, and account management (FR-16, RN-06).
-- Ad hoc file imports (FR-03) are validated by magic bytes (not just extension); the primary directory-scan/watch-folder flow never accepts arbitrary uploaded bytes, only local path references the backend itself validates for existence and readability.
+- Ingestion never accepts uploaded bytes at all (FR-03): the watch-folder/directory-scan flow takes only local path references, which the backend validates for existence and readability, and every file it does read is validated by magic bytes (not just extension) before a row is created.
 
 ---
 
@@ -1030,17 +1041,22 @@ All routes beyond `/login` require an authenticated local session; there is no p
 ### 14.1 Deployment / Runtime
 
 - **Docker Compose** stack: `api` (FastAPI), `worker-inference` (GPU access via `deploy.resources` / NVIDIA Container Toolkit when available), `worker-agents`, `beat` (periodic tasks: retention purge), `db` (PostgreSQL 16), `redis`, `frontend` (Next.js). Every service's published port is bound to `127.0.0.1` — none are exposed to the LAN by default.
-- Environment variables control: connections (DB/Redis), the secret-encryption key, session token lifetimes, the app-data/reports/exports directories, and LLM defaults (overridable via FR-13, local by default).
+- Environment variables control: connections (DB/Redis), the secret-encryption key, session token lifetimes, the app-data and reports directories, and LLM defaults (overridable via FR-13, local by default).
 - Model weights and the golden-set reference data are mounted from a local volume; the active version is resolved at worker startup.
-- The watch root is mounted **read-only** into the `api`/`worker-inference` containers (they only ever read from it, section 3.5); the app-data directory (annotated images, reports, exports, database volume) is a separate, writable local volume.
+- The watch root is mounted **read-only** into the `api`/`worker-inference` containers (they only ever read from it, section 3.5); the app-data directory (annotated images, reports, uploaded weights, database volume) is a separate, writable local volume.
 - Logs to stdout (JSON); local log retention ≥ 90 days.
-- The native launcher (FR-20, section 3.8) is packaged per OS (Windows/Linux) as a standalone installable application; it shells out to the same Docker Compose stack rather than reimplementing it.
+- The `api`/`worker-*`/`beat` services all run one published backend image and the `frontend` service a published frontend image (`pcb-inspect-backend`, `pcb-inspect-frontend`, tagged with the release version); an inspection station pulls them and never builds. A source checkout layers `docker-compose.build.yml` (build from source) and `docker-compose.dev.yml` (frontend bind mount, hot reload) over the same file via `COMPOSE_FILE`, so the released stack description and the developer one cannot drift.
+- The frontend image runs a production `next build` standalone server, not a dev server. The API URL is injected into the page at request time rather than baked at build time, so one image serves every install regardless of its configured ports.
+- The native launcher (FR-20, section 3.8) is packaged per OS (Windows `.exe`/`.msi`, Linux `.deb`/`.AppImage`) as a standalone installable application; it shells out to the same Docker Compose stack rather than reimplementing it, and carries that stack's Compose file embedded in its binary.
+- Installed state lives in one per-user directory (`~/.local/share/PCB-Inspect`, `%LOCALAPPDATA%\PCB-Inspect`): Compose file, `.env` (0600, generated secrets), app-data, watch root, model weight. Upgrading replaces the application and re-pins the image version; uninstalling leaves that directory and the database volume in place.
 
 ### 14.2 CI (GitHub Actions)
 
 - Backend: lint (ruff), type-check (mypy), migrations, test suite with ephemeral Postgres/Redis, Docker image build.
 - Frontend: dependency install, lint, type-check, unit tests, production build, Playwright E2E against the Compose stack.
-- `docker-compose.yml` validation and build of every image on each PR.
+- `docker-compose.yml` validation (both the released composition and the developer layering) and build of every image on each PR.
+- Launcher: orchestration/provisioning unit tests on every PR, plus a compile check of the Tauri shell against the real Tauri API.
+- Release (on a version tag): publish both container images to the registry and build the per-OS installers on their own runners, with the tag's version stamped into the launcher so it pulls the matching images.
 - AI pipeline tests with a mocked LLM — CI does not depend on an external provider.
 - Ingestion tests run against a temporary directory fixture standing in for the watch root — no real camera or network storage involved.
 
@@ -1059,7 +1075,7 @@ The system is delivered in three incremental phases; each phase ends with the sy
 |---|---|---|---|---|
 | 1 | Inspection Core (MVP) | Local auth (single account), directory-based ingestion (watch mode + one-off scan), YOLO detection pipeline with baseline analysis, dashboard, analysis detail with annotated viewer, search/history, status SSE, health and OpenAPI, native launcher for zero-command startup | FR-01, FR-02, FR-03, FR-04, FR-05, FR-06 (baseline), FR-07, FR-08, FR-14, FR-15, FR-20; FE-01–FE-05, FE-09, FE-10 | An operator double-clicks the application icon, points the app at a folder of PCB images, and views detections + baseline analysis end-to-end, with no LLM configured and no command typed |
 | 2 | Intelligence | Agent chain (Analyst → Reviewer → Summarizer), chat with tool-calling and streaming, analysis validation and per-detection feedback, manual annotation, LLM configuration (local-first) | FR-06 (agents), FR-09, FR-10, FR-13 (LLM/policy); FE-06, feedback actions in FE-03 | In-depth analysis generated in `conditional` and `on_demand` modes; chat answers with real data via tools, using a local LLM by default |
-| 3 | Mature Operation | Reports (CSV/XLSX/PDF), model versioning with golden set, quality alerts, dataset export, full audit, retention, complete settings area | FR-11, FR-12, FR-16, FR-17, FR-18, FR-19; FE-07, FE-08 | A new model version is registered, evaluated, and activated with no downtime; a feedback dataset is exported in YOLO format |
+| 3 | Mature Operation | Reports (CSV/XLSX/PDF), model versioning with golden set and weight upload, the AI model screen, quality alerts, full audit, retention, complete settings area | FR-11, FR-12, FR-16, FR-17, FR-19; FE-07, FE-08, FE-11 | A new model version is uploaded, evaluated, and activated with no downtime |
 
 ---
 
@@ -1069,7 +1085,7 @@ The system is delivered in three incremental phases; each phase ends with the sy
 |---|---|
 | FR-01 | `app/auth/router.py`, `app/auth/service.py` |
 | FR-02 | `app/users/router.py`, `app/users/models.py` |
-| FR-03 | `app/inspections/router.py::{scan,import}`, `app/ingestion/watcher.py`, `app/ingestion/naming.py` (batch/board convention) |
+| FR-03 | `app/ingestion/router.py::scan`, `app/ingestion/watcher.py`, `app/ingestion/naming.py` (batch/board convention), `app/core/host_paths.py` (host folder ↔ container path) |
 | FR-04 | `app/tasks/pipeline.py`, `app/inspections/state.py` (state machine) |
 | FR-05 | `app/inference/worker.py`, `app/inference/annotator.py` |
 | FR-06 | `app/knowledge/defects.py` (knowledge base), `app/agents/graph.py` (LangGraph), `app/agents/prompts/`, `app/agents/policy.py` (conditional mode) |
@@ -1077,16 +1093,15 @@ The system is delivered in three incremental phases; each phase ends with the sy
 | FR-08 | `app/stats/router.py`, `app/stats/service.py` (+ Redis cache) |
 | FR-09 | `app/chat/router.py`, `app/chat/agent.py`, `app/chat/tools.py` |
 | FR-10 | `app/analyses/router.py::review`, `app/detections/router.py::feedback`, `app/inspections/router.py::{disposition,annotations}` |
-| FR-11 | `app/reports/router.py`, `app/reports/generators/{csv,xlsx,pdf}.py` |
-| FR-12 | `app/settings/models_router.py`, `app/inference/loader.py`, `app/inference/golden_set.py` (evaluation) |
+| FR-11 | `app/reports/router.py`, `app/reports/{content,dataset,document,narrative,strings}.py`, `app/reports/generators/{csv,xlsx,pdf}.py` |
+| FR-12 | `app/settings/models_router.py`, `app/settings/models_service.py` (upload/registration), `app/inference/loader.py`, `app/inference/golden_set.py` (evaluation) |
 | FR-13 | `app/settings/config_router.py`, `app/core/config_store.py` |
 | FR-14 | `app/events/sse.py` (Redis pub/sub → SSE) |
 | FR-15 | `app/core/health.py`, FastAPI OpenAPI |
 | FR-16 | `app/audit/service.py`, `app/audit/models.py` |
 | FR-17 | `app/tasks/retention.py` (Celery beat) |
-| FR-18 | `app/datasets/exporter.py` (YOLO format), `app/datasets/router.py` |
 | FR-19 | `app/alerts/service.py`, `app/alerts/router.py`, `app/tasks/alert_monitor.py` (Celery beat) |
-| FR-20 | `launcher/` (native shell + startup orchestration, wraps `docker compose up -d` + health-wait) |
+| FR-20 | `launcher/core/src/bootstrap.rs` (first-run provisioning), `launcher/core/src/orchestrator.rs` (weight download, image pull, `docker compose up -d` + health-wait), `launcher/src-tauri/` (native shell), `.github/workflows/release.yml` (images + per-OS installers) |
 | FE-01 | `src/app/login/page.tsx`, `src/contexts/AuthContext.tsx` |
 | FE-02 | `src/app/page.tsx`, `src/components/dashboard/*` |
 | FE-03 | `src/app/inspections/[id]/page.tsx`, `src/components/viewer/AnnotatedImageViewer.tsx` |
@@ -1097,6 +1112,7 @@ The system is delivered in three incremental phases; each phase ends with the sy
 | FE-08 | `src/app/settings/*`, `src/components/auth/AuthGuard.tsx` |
 | FE-09 | `src/hooks/useEventStream.ts` |
 | FE-10 | Cross-cutting patterns (ARIA, color legend, responsiveness) |
+| FE-11 | `src/app/(app)/model/page.tsx` |
 
 ---
 
@@ -1113,5 +1129,5 @@ Not covered in this project's scope:
 - Detecting defects outside the 6 trained classes
 - Multi-tenancy (multiple isolated inspection stations sharing one instance)
 - Predictive process-failure analysis (only descriptive trends and threshold-based alerts in this version)
-- Active learning / assisted annotation (annotating undetected defects is manual; retraining consumes the dataset exported by FR-18 externally)
+- Active learning / assisted annotation (annotating undetected defects is manual, and nothing in the software turns that feedback into training data; see the withdrawn FR-18)
 - External notifications (email/Slack/WhatsApp) — in-app SSE events only

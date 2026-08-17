@@ -8,7 +8,12 @@ description = "Backend orchestration logic for the PCB-Inspect native launcher (
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# No TLS feature: the launcher only ever talks to 127.0.0.1 over plain HTTP (PRD section
-# 13 — every service is localhost-only), so pulling in rustls/native-tls would just be dead
-# weight (and a slower, C-toolchain-dependent build for no benefit).
-ureq = { version = "2", default-features = false }
+# `tls` is needed for exactly one request: fetching the model weight from its GitHub release
+# asset on first run (download.rs). Everything else the launcher talks to is 127.0.0.1 over
+# plain HTTP (PRD section 13 — every service is localhost-only). rustls is used rather than
+# native-tls so the build stays free of a system OpenSSL dependency on every packaging target.
+ureq = { version = "2", default-features = false, features = ["tls"] }
+# Generates the SECRET_KEY and database password an install would otherwise ask a human to
+# invent (and, per .env.example's placeholder, usually not invent at all).
+getrandom = "0.2"
+sha2 = "0.11.0"

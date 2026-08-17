@@ -1,0 +1,21 @@
+# Development overlay: the frontend runs `next dev` against the checkout itself, so editing a
+# file under ./frontend is picked up by hot reload instead of requiring an image rebuild and a
+# container recreate. Use together with docker-compose.build.yml —
+# `.env.example` already chains all three through COMPOSE_FILE.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.dev.yml up -d
+services:
+  frontend:
+    # Never the release tag: this container holds a dev-mode image with the whole dependency
+    # tree, and it must not be mistaken for (or pushed as) the shipped one.
+    image: pcb-inspect-frontend:dev
+    build:
+      target: dev
+    volumes:
+      - ./frontend:/srv
+      # Anonymous volumes, declared *after* the bind mount so they win: /srv/node_modules is
+      # the container's own `npm ci` result (the host's may not even exist, or may hold
+      # binaries built for another platform), and /srv/.next keeps the dev build cache out of
+      # the checkout, where it would collide with a `npm run dev` running on the host.
+      - /srv/node_modules
+      - /srv/.next

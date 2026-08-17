@@ -20,7 +20,8 @@
         "resizable": true,
         "decorations": true,
         "center": true,
-        "visible": true
+        "visible": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {
@@ -30,11 +31,30 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi", "deb", "appimage"],
+    "publisher": "PCB-Inspect",
+    "homepage": "https://github.com/arthursantos67/PCB-inspect",
+    "copyright": "Copyright (c) PCB-Inspect contributors",
+    "category": "Utility",
+    "shortDescription": "Desktop launcher for the PCB-Inspect inspection system",
+    "longDescription": "Starts the local PCB-Inspect stack and opens its dashboard in a native window. On first run it provisions its own install directory, generates the application secrets, downloads the inspection model and the application images, and starts the containers, with no terminal and no manual configuration. Requires a container runtime (Docker Engine or Docker Desktop) to be installed on the machine.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "section": "utils"
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "languages": ["English"],
+        "startMenuFolder": "PCB-Inspect"
+      }
+    }
   }
 }

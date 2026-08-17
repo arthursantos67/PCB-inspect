@@ -1,0 +1,34 @@
+# Overlay that builds the application images from this checkout instead of pulling the
+# published ones. `docker-compose.yml` alone describes an installed system, where ./backend and
+# ./frontend don't exist; everything that needs the source tree lives here.
+#
+# `image:` stays inherited from the base file, so a local build lands under the same tag the
+# release would pull — `docker compose up -d` then finds it locally and never contacts GHCR.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build
+#
+# `.env.example` sets COMPOSE_FILE so a checkout picks this up automatically and the familiar
+# `docker compose build` / `docker compose up -d --build` keep working unchanged.
+x-backend-build: &backend-build
+  build:
+    context: ./backend
+
+services:
+  api:
+    <<: *backend-build
+
+  worker-inference:
+    <<: *backend-build
+
+  worker-agents:
+    <<: *backend-build
+
+  worker-housekeeping:
+    <<: *backend-build
+
+  beat:
+    <<: *backend-build
+
+  frontend:
+    build:
+      context: ./frontend

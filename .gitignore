@@ -29,18 +29,29 @@ launcher/src-tauri/gen/
 .env.*
 !.env.example
 
-# Local runtime data (watch-root fixture, app-data: db volume, annotated images, reports, exports)
+# Local runtime data (watch-root fixture, app-data: db volume, annotated images, reports, exports).
+# Only the two .gitkeep files are tracked. Un-ignoring the *directories* would make git descend
+# into them again and report every board image and generated report as untracked, one careless
+# `git add -A` away from being committed — so the contents are re-ignored right after.
 data/*
 !data/watch-root/
+data/watch-root/*
 !data/watch-root/.gitkeep
 !data/app-data/
+data/app-data/*
 !data/app-data/.gitkeep
 
 # Editor / tooling
 .claude/
+.serena/
 .vscode/
 .idea/
 *.log
+
+# uv's resolver lock. CI, the Dockerfiles and local installs all use `pip install -e ".[dev]"`
+# against pyproject.toml, so a committed lock file would be a second source of truth nobody
+# reads and everybody drifts from.
+uv.lock
 
 # OS
 .DS_Store

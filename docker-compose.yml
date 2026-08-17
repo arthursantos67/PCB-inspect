@@ -1,13 +1,36 @@
+# The stack as an *installed* system runs it: every application service refers to a published
+# image and nothing here needs the source tree to exist. This is the file the launcher ships
+# and writes into the install directory (launcher/core/src/bootstrap.rs), which is why it can
+# no longer carry `build:` sections — an operator's machine has no ./backend or ./frontend.
+#
+# Working from a checkout instead? Two overlays add what was taken out, and `.env.example`
+# already wires them in through COMPOSE_FILE, so `docker compose up -d` keeps behaving the way
+# it always has:
+#   docker-compose.build.yml  build the images from ./backend and ./frontend
+#   docker-compose.dev.yml    run the frontend as `next dev` off a bind mount (hot reload)
 x-backend-image: &backend-image
-  build:
-    context: ./backend
+  image: ${PCB_INSPECT_REGISTRY:-ghcr.io/arthursantos67}/pcb-inspect-backend:${PCB_INSPECT_VERSION:-latest}
   env_file: .env
   environment:
     PYTHONUNBUFFERED: "1"
   volumes:
+    # The host filesystem, read-only, so the operator can point the watch root at any folder on
+    # their machine from Settings > Ingestion without editing this file and restarting the stack
+    # (FR-20 terminal-free operation). Paths are translated onto this mount at the filesystem
+    # boundary — see `app/core/host_paths.py`. Narrow HOST_FS_SOURCE (e.g. to /home) to restrict
+    # what the containers can read. HOST_FS_SOURCE is the bind source in the host's own path
+    # syntax; HOST_FS_ROOT is the prefix the backend maps that mount back to when it shows a
+    # path to the operator. They are the same value on Linux and differ on Windows, where the
+    # source is a drive path (C:/Users/...) and no such prefix exists.
+    - ${HOST_FS_SOURCE:-/}:${HOST_FS_MOUNT:-/hostfs}:ro
+    # Kept so images ingested before the host mount existed keep resolving their stored
+    # `/data/watch-root/...` paths.
     - ${WATCH_ROOT_HOST_PATH:-./data/watch-root}:${WATCH_ROOT:-/data/watch-root}:ro
     - ${APP_DATA_HOST_PATH:-./data/app-data}:${APP_DATA_DIR:-/data/app-data}
-    - ./weights:/weights:ro
+    # Model weights live outside the image (114 MB, and swappable at runtime through
+    # Settings > Models) — on an installed system this points into the install directory,
+    # where the launcher downloads `best.pt` on first run.
+    - ${WEIGHTS_HOST_PATH:-./weights}:/weights:ro
   # Lets `host.docker.internal` (the default LLM_BASE_URL host, .env.example) resolve on
   # plain Docker Engine/Linux hosts too, not just Docker Desktop (Mac/Windows).
   extra_hosts:
@@ -43,7 +66,7 @@ services:
 
   worker-agents:
     <<: *backend-image
-    command: celery -A app.tasks.celery_app worker --pool=threads --concurrency=4 --queues=agents --loglevel=info
+    command: celery -A app.tasks.celery_app worker --pool=threads --concurrency=1 --queues=agents --loglevel=info
     environment:
       PYTHONUNBUFFERED: "1"
       WORKER_ROLE: agents
@@ -86,10 +109,12 @@ services:
       retries: 10
 
   frontend:
-    build:
-      context: ./frontend
+    image: ${PCB_INSPECT_REGISTRY:-ghcr.io/arthursantos67}/pcb-inspect-frontend:${PCB_INSPECT_VERSION:-latest}
     env_file: .env
     environment:
+      # Read at request time by the root layout and handed to the browser (see
+      # frontend/src/lib/runtime-config.ts), so changing API_PORT here is enough — the
+      # production image is never rebuilt to change where the API lives.
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
