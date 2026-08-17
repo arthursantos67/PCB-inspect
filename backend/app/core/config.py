@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     watch_root: Path = Path("/data/watch-root")
     app_data_dir: Path = Path("/data/app-data")
 
+    # Host filesystem, bind-mounted read-only so the operator can point the watch root at any
+    # folder on their machine from the UI instead of editing .env and restarting the stack
+    # (FR-20). `host_fs_root` is the host directory that was mounted and `host_fs_mount` is
+    # where it lands inside the container — together they let `app.core.host_paths` translate
+    # an operator-entered host path into something the container can actually open. Set
+    # `host_fs_mount` to "" when the app runs directly on the host, with no translation needed.
+    host_fs_root: str = "/"
+    host_fs_mount: str = "/hostfs"
+
     # Inference backend (RV-01/RV-02). "fake" swaps the loaded model for a deterministic
     # stub (app/inference/model.py) — used only by the Playwright E2E job (section 14.2),
     # since `weights/best.pt` (114MB, README) isn't tracked in git and CI runners have no

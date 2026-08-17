@@ -8,12 +8,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analyses.service import create_baseline_analysis
-from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.ingestion import service as ingestion_service
 from app.ingestion.naming import infer_batch_and_board
 from app.ingestion.watcher import poll_watch_root_once
-from app.main import app as fastapi_app
 from app.models import Batch, Board, Detection, InspectionImage, ModelVersion
 from app.models.enums import ImageSource, ImageStatus
 
@@ -46,20 +44,6 @@ def watch_root(tmp_path: Path) -> Path:
     root = tmp_path / "watch-root"
     root.mkdir()
     return root
-
-
-@pytest.fixture
-def isolated_app_data_dir(tmp_path: Path):
-    """The import endpoint writes uploaded bytes under `settings.app_data_dir` (FR-03) — the
-    real default (`/data/app-data`, only valid inside the Docker volume mount) isn't writable
-    outside a container, so tests override it with a temp directory via dependency injection.
-    """
-    data_dir = tmp_path / "app-data"
-    data_dir.mkdir()
-    overridden = get_settings().model_copy(update={"app_data_dir": data_dir})
-    fastapi_app.dependency_overrides[get_settings] = lambda: overridden
-    yield data_dir
-    fastapi_app.dependency_overrides.pop(get_settings, None)
 
 
 class _FakeInferenceTask:
@@ -247,58 +231,28 @@ async def test_scan_records_invalid_file_as_failed_without_affecting_the_rest(
     assert failed_image.height is None
 
 
-# --- Ad hoc import -----------------------------------------------------------------------------
-
-
-async def test_import_uploads_and_registers_a_stray_file(
-    client: AsyncClient, db_session: AsyncSession, tmp_path: Path, isolated_app_data_dir: Path
+async def test_scan_ignores_non_image_files_sitting_next_to_the_boards(
+    client: AsyncClient, db_session: AsyncSession, watch_root: Path
 ) -> None:
+    """A real camera folder also collects OS junk and paperwork. Those aren't "invalid images",
+    they're not images at all, so they're skipped outright instead of becoming failed rows the
+    operator has to read past on every poll.
+    """
     token = await _setup_account(client)
-    stray = tmp_path / "stray.png"
-    _write_png(stray)
+    batch_dir = watch_root / "BATCH-001"
+    batch_dir.mkdir()
+    _write_jpeg(batch_dir / "board-1.jpg")
+    (batch_dir / "notes.txt").write_text("not an image")
+    (batch_dir / "Thumbs.db").write_bytes(b"\x00\x01")
 
-    with stray.open("rb") as fh:
-        response = await client.post(
-            "/api/v1/inspections/import",
-            files={"files": ("stray.png", fh, "image/png")},
-            headers=_auth_headers(token),
-        )
-
-    assert response.status_code == 202
-    assert response.json()["ingested"] == 1
-
-    image = await db_session.scalar(
-        select(InspectionImage).where(InspectionImage.source == ImageSource.MANUAL_IMPORT)
+    response = await client.post(
+        "/api/v1/inspections/scan", json={"path": str(watch_root)}, headers=_auth_headers(token)
     )
-    assert image is not None
-    assert image.board_id is None
-    assert image.original_path != str(stray)  # a copy, written into app-data (FR-03)
-    assert Path(image.original_path).read_bytes() == stray.read_bytes()
-    assert stray.exists()  # the operator's original file is left alone
 
-
-async def test_import_rejects_duplicate_checksum(
-    client: AsyncClient, db_session: AsyncSession, tmp_path: Path, isolated_app_data_dir: Path
-) -> None:
-    token = await _setup_account(client)
-    stray = tmp_path / "stray.png"
-    _write_png(stray)
-
-    async def _import(name: str) -> dict[str, object]:
-        with stray.open("rb") as fh:
-            response = await client.post(
-                "/api/v1/inspections/import",
-                files={"files": (name, fh, "image/png")},
-                headers=_auth_headers(token),
-            )
-        return response.json()  # type: ignore[no-any-return]
-
-    first = await _import("stray.png")
-    assert first["ingested"] == 1
-
-    second = await _import("stray-again.png")
-    assert second["ingested"] == 0
-    assert second["duplicate"] == 1
+    body = response.json()
+    assert body["discovered"] == 1
+    assert body["ingested"] == 1
+    assert body["failed"] == 0
 
     count = await db_session.scalar(select(func.count()).select_from(InspectionImage))
     assert count == 1
@@ -451,33 +405,10 @@ async def test_scan_still_succeeds_and_enqueues_the_rest_when_one_enqueue_fails(
     assert len(enqueue_stub.calls) == 1  # the failed one was logged and skipped, not retried here
 
 
-async def test_import_enqueues_the_ingested_file(
-    client: AsyncClient,
-    tmp_path: Path,
-    isolated_app_data_dir: Path,
-    enqueue_stub: _FakeInferenceTask,
-) -> None:
-    token = await _setup_account(client)
-    stray = tmp_path / "stray.png"
-    _write_png(stray)
-
-    with stray.open("rb") as fh:
-        response = await client.post(
-            "/api/v1/inspections/import",
-            files={"files": ("stray.png", fh, "image/png")},
-            headers=_auth_headers(token),
-        )
-
-    image_id = response.json()["files"][0]["image_id"]
-    assert enqueue_stub.calls == [image_id]
-
-
 # --- Progress query (FR-04) ------------------------------------------------------------------
 
 
-async def test_get_progress_returns_current_status(
-    client: AsyncClient, watch_root: Path
-) -> None:
+async def test_get_progress_returns_current_status(client: AsyncClient, watch_root: Path) -> None:
     token = await _setup_account(client)
     batch_dir = watch_root / "BATCH-001"
     batch_dir.mkdir()
@@ -488,9 +419,7 @@ async def test_get_progress_returns_current_status(
     )
     image_id = scan_response.json()["files"][0]["image_id"]
 
-    progress = await client.get(
-        f"/api/v1/inspections/{image_id}", headers=_auth_headers(token)
-    )
+    progress = await client.get(f"/api/v1/inspections/{image_id}", headers=_auth_headers(token))
 
     assert progress.status_code == 200
     body = progress.json()
@@ -531,9 +460,7 @@ async def test_get_progress_includes_analysis_once_baseline_completes(
     await create_baseline_analysis(db_session, image, [detection])
     await db_session.commit()
 
-    response = await client.get(
-        f"/api/v1/inspections/{image.id}", headers=_auth_headers(token)
-    )
+    response = await client.get(f"/api/v1/inspections/{image.id}", headers=_auth_headers(token))
 
     assert response.status_code == 200
     body = response.json()

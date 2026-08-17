@@ -2,7 +2,7 @@
 
 Covers every value FR-13 requires at runtime: confidence thresholds, LLM connection, the
 agent analysis policy and its trigger criteria, quality alert thresholds, the watch root
-path/naming convention, retention, and the reports/exports output directory — see
+path/naming convention, retention, and the reports output directory — see
 `config_schema.py` for the full key registry and per-key validation.
 """
 
@@ -18,9 +18,11 @@ from app.audit.service import record_audit
 from app.core.config import get_settings
 from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.errors import ApiError
+from app.core.host_paths import normalize_host_path, to_container_path, to_host_path
 from app.core.language import LANGUAGE_CONFIG_KEY, Language, coerce_language
 from app.models import SystemConfig
 from app.settings.config_schema import validate_config_value
+from app.settings.schemas import DirectoryEntry, DirectoryListing
 
 # Keys that must pass the invalid-path guard (PATH_NOT_FOUND/PATH_NOT_READABLE) before being
 # persisted — see FE-05 (no native folder picker, so the backend is the source of truth).
@@ -62,6 +64,40 @@ async def get_config_value(db: AsyncSession, key: str, default: Any = None) -> A
     if config is None:
         return default
     return config.value
+
+
+async def list_directories(path: str | None) -> DirectoryListing:
+    """One level of the host filesystem for the Settings > Ingestion folder picker.
+
+    Defaults to the root of whatever host subtree was mounted, so the operator can browse to any
+    folder on their machine instead of typing an absolute path they'd have to know by heart
+    (FR-20). Unreadable subdirectories are skipped rather than failing the whole listing — a
+    home directory routinely contains a few the app can't open.
+    """
+    from app.ingestion.service import validate_directory_path  # avoids a service import cycle
+
+    host_root = get_settings().host_fs_root or "/"
+    # Normalized first: `is_relative_to` is a lexical comparison, so without collapsing `..`
+    # a path like `/home/../etc` would satisfy a guard rooted at `/home` and then be resolved
+    # by the filesystem outside the mount (`normalize_host_path`).
+    host_path = Path(normalize_host_path(path)) if path else Path(host_root)
+    # Without this, a path outside the mounted subtree would fall through untranslated and list
+    # the container's own filesystem (`/etc`, `/usr`) instead of the operator's.
+    if not host_path.is_absolute() or not host_path.is_relative_to(host_root):
+        raise ApiError("PATH_NOT_FOUND", f"Path is outside the browsable root: {host_path}", 422)
+    await validate_directory_path(host_path)
+
+    container_path = to_container_path(host_path)
+    entries: list[DirectoryEntry] = []
+    for child in sorted(container_path.iterdir(), key=lambda item: item.name.lower()):
+        if child.name.startswith(".") or not child.is_dir():
+            continue
+        if not os.access(child, os.R_OK | os.X_OK):
+            continue
+        entries.append(DirectoryEntry(name=child.name, path=str(to_host_path(child))))
+
+    parent = str(host_path.parent) if str(host_path) != host_root else None
+    return DirectoryListing(path=str(host_path), parent=parent, directories=entries)
 
 
 async def get_language(db: AsyncSession) -> Language:
@@ -112,6 +148,12 @@ async def update_config(
     # Validate every key up front — a batch with one bad key rejects atomically rather than
     # partially applying (nothing below this point does I/O until the loop that follows).
     normalized = {key: validate_config_value(key, value) for key, value in updates.items()}
+    # A directory persisted with `..` still in it would defeat the mount containment checks on
+    # every later use (`app.core.host_paths.normalize_host_path`), so path keys are collapsed to
+    # their canonical form before they are checked and stored.
+    for path_key in _PATH_KEYS | _WRITABLE_DIR_KEYS:
+        if normalized.get(path_key):
+            normalized[path_key] = str(normalize_host_path(str(normalized[path_key])))
 
     for key, value in normalized.items():
         if key in _PATH_KEYS and value:
