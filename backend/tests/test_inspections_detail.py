@@ -15,8 +15,17 @@ from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analyses.service import create_baseline_analysis
-from app.models import Batch, Board, Detection, InspectionImage, ModelVersion
-from app.models.enums import ImageSource, ImageStatus
+from app.core.language import Language
+from app.inspections import router as inspections_router
+from app.knowledge.defects import knowledge_base
+from app.models import Analysis, Batch, Board, Detection, InspectionImage, ModelVersion
+from app.models.enums import (
+    AnalysisSource,
+    AnalysisStatus,
+    DefectType,
+    ImageSource,
+    ImageStatus,
+)
 
 ACCOUNT = {
     "email": "operator@pcb-inspect.local",
@@ -226,6 +235,100 @@ async def test_get_inspection_includes_review_history_on_analysis(
     assert len(body["analysis"]["reviews"]) == 1
     assert body["analysis"]["reviews"][0]["action"] == "validated"
     assert body["analysis"]["reviews"][0]["comment"] == "Looks correct."
+
+
+# --- ?language= (issue #50) ---------------------------------------------------------------
+
+
+class _FakeTranslateTask:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def delay(self, analysis_id: str, language: str) -> None:
+        self.calls.append((analysis_id, language))
+
+
+@pytest.fixture
+def _stub_translate_analysis(monkeypatch: pytest.MonkeyPatch) -> _FakeTranslateTask:
+    """No Redis broker in the test environment, same as every other `.delay()`-stubbing test."""
+    stub = _FakeTranslateTask()
+    monkeypatch.setattr(inspections_router, "translate_analysis", stub)
+    return stub
+
+
+async def test_baseline_analysis_is_served_in_the_requested_language_without_the_worker(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    tmp_path: Path,
+    _stub_translate_analysis: _FakeTranslateTask,
+) -> None:
+    """A baseline analysis is the curated catalogue, which exists in both languages, so the
+    screen gets Portuguese on the spot and nothing is queued.
+    """
+    token = await _setup_account(client)
+    model_version = await _make_model_version(db_session)
+    original = tmp_path / "board.jpg"
+    _write_jpeg(original)
+    image = await _make_image(db_session, None, original, status=ImageStatus.DETECTED)
+    detection = await _make_detection(db_session, image, model_version)
+    await create_baseline_analysis(db_session, image, [detection])
+    await db_session.commit()
+
+    response = await client.get(
+        f"/api/v1/inspections/{image.id}?language=pt", headers=_auth_headers(token)
+    )
+
+    assert response.status_code == 200, response.text
+    analysis = response.json()["analysis"]
+    assert analysis["language"] == "pt"
+    expected = knowledge_base(Language.PT)[DefectType.SHORT]
+    assert analysis["per_defect"][0]["description"] == expected.description
+    assert _stub_translate_analysis.calls == []
+
+
+async def test_untranslated_agent_analysis_is_queued_and_served_as_written(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    tmp_path: Path,
+    _stub_translate_analysis: _FakeTranslateTask,
+) -> None:
+    """Agent prose can only be translated by the model, which takes minutes on this station's
+    CPU: the screen gets the English it has now, and the worker fills the cache for next time.
+    """
+    token = await _setup_account(client)
+    model_version = await _make_model_version(db_session)
+    original = tmp_path / "board.jpg"
+    _write_jpeg(original)
+    image = await _make_image(db_session, None, original, status=ImageStatus.COMPLETED)
+    detection = await _make_detection(db_session, image, model_version)
+    analysis = Analysis(
+        image_id=image.id,
+        status=AnalysisStatus.COMPLETED,
+        source=AnalysisSource.AGENTS,
+        language="en",
+        per_defect=[
+            {
+                "detection_id": str(detection.id),
+                "severity": "high",
+                "description": "Solder bridges two adjacent pads.",
+                "probable_causes": ["Excess solder paste"],
+                "suggested_solutions": ["Rework the joint"],
+            }
+        ],
+        executive_summary="This board needs rework.",
+    )
+    db_session.add(analysis)
+    await db_session.commit()
+
+    response = await client.get(
+        f"/api/v1/inspections/{image.id}?language=pt", headers=_auth_headers(token)
+    )
+
+    assert response.status_code == 200, response.text
+    body_analysis = response.json()["analysis"]
+    assert body_analysis["language"] == "en"
+    assert body_analysis["per_defect"][0]["description"] == "Solder bridges two adjacent pads."
+    assert _stub_translate_analysis.calls == [(str(analysis.id), "pt")]
 
 
 async def test_get_inspection_returns_404_for_unknown_id(client: AsyncClient) -> None:

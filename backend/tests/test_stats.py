@@ -74,7 +74,12 @@ async def _make_image(
     *,
     status: ImageStatus,
     processed_at: datetime | None,
+    created_at: datetime | None = None,
 ) -> InspectionImage:
+    """`created_at` is server-defaulted to the *transaction* timestamp, so two images seeded in
+    one test share it to the microsecond. Pass it explicitly whenever a test is about ordering
+    by ingestion time, otherwise the two rows tie and the order is arbitrary.
+    """
     image = InspectionImage(
         board_id=board.id,
         source=ImageSource.WATCH_FOLDER,
@@ -82,6 +87,7 @@ async def _make_image(
         checksum_sha256=uuid.uuid4().hex,
         status=status,
         processed_at=processed_at,
+        **({"created_at": created_at} if created_at is not None else {}),
     )
     db.add(image)
     await db.flush()
@@ -119,7 +125,13 @@ async def _get(client: AsyncClient, token: str, path: str, **params: object) -> 
 
 
 @pytest.mark.parametrize(
-    "path", ["/api/v1/stats/summary", "/api/v1/stats/trends", "/api/v1/stats/by-defect-type"]
+    "path",
+    [
+        "/api/v1/stats/summary",
+        "/api/v1/stats/trends",
+        "/api/v1/stats/by-defect-type",
+        "/api/v1/stats/recent-batches",
+    ],
 )
 async def test_requires_authentication(client: AsyncClient, path: str) -> None:
     response = await client.get(path)
@@ -349,6 +361,132 @@ async def test_trends_zero_fills_buckets_with_no_data(
     # A 7-day window has at least 7 daily buckets even though only one has data.
     assert len(body["points"]) >= 7
     assert sum(1 for point in body["points"] if point["total"] == 0) >= 5
+
+
+# --- Recent batches: weighted severity + status + ordering -------------------------------------
+
+
+async def test_recent_batches_weighted_severity_and_defect_count(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    model_version = await _make_model_version(db_session)
+    now = datetime.now(UTC)
+
+    # Low-severity batch: only mouse_bite (weight 1) detections -> LOW severity.
+    low_board = await _make_board(db_session, "BATCH-LOW", "A1")
+    low_img = await _make_image(
+        db_session, low_board, status=ImageStatus.COMPLETED, processed_at=now
+    )
+    await _make_detection(db_session, low_img, model_version, DefectType.MOUSE_BITE)
+    await _make_detection(db_session, low_img, model_version, DefectType.MOUSE_BITE)
+
+    # Critical batch: only open_circuit (weight 4) detections -> CRITICAL severity.
+    critical_board = await _make_board(db_session, "BATCH-CRITICAL", "A1")
+    critical_img = await _make_image(
+        db_session, critical_board, status=ImageStatus.COMPLETED, processed_at=now
+    )
+    await _make_detection(db_session, critical_img, model_version, DefectType.OPEN_CIRCUIT)
+
+    # RN-07: an unreported detection must not count toward defect_count or the weighted score.
+    await _make_detection(
+        db_session, critical_img, model_version, DefectType.SHORT, is_reported=False
+    )
+
+    await db_session.commit()
+
+    body = await _get(client, token, "/api/v1/stats/recent-batches")
+    by_batch = {row["batch_number"]: row for row in body["results"]}
+
+    assert by_batch["BATCH-LOW"]["defect_count"] == 2
+    assert by_batch["BATCH-LOW"]["severity"] == "low"
+    assert by_batch["BATCH-LOW"]["status"] == "COMPLETED"
+
+    assert by_batch["BATCH-CRITICAL"]["defect_count"] == 1
+    assert by_batch["BATCH-CRITICAL"]["severity"] == "critical"
+
+
+async def test_recent_batches_status_reflects_worst_in_flight_image(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    now = datetime.now(UTC)
+
+    board = await _make_board(db_session, "BATCH-MIXED", "A1")
+    await _make_image(db_session, board, status=ImageStatus.COMPLETED, processed_at=now)
+    await _make_image(db_session, board, status=ImageStatus.ANALYZING, processed_at=None)
+    await _make_image(db_session, board, status=ImageStatus.QUEUED, processed_at=None)
+    await db_session.commit()
+
+    body = await _get(client, token, "/api/v1/stats/recent-batches")
+    batch = next(row for row in body["results"] if row["batch_number"] == "BATCH-MIXED")
+    # QUEUED is the earliest pipeline stage still in flight -> wins over ANALYZING/COMPLETED.
+    assert batch["status"] == "QUEUED"
+
+
+async def test_recent_batches_status_flags_failed_over_everything_else(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    now = datetime.now(UTC)
+
+    board = await _make_board(db_session, "BATCH-FAILED", "A1")
+    await _make_image(db_session, board, status=ImageStatus.COMPLETED, processed_at=now)
+    failed = await _make_image(db_session, board, status=ImageStatus.PROCESSING, processed_at=None)
+    failed.status = ImageStatus.FAILED
+    await db_session.commit()
+
+    body = await _get(client, token, "/api/v1/stats/recent-batches")
+    batch = next(row for row in body["results"] if row["batch_number"] == "BATCH-FAILED")
+    assert batch["status"] == "FAILED"
+
+
+async def test_recent_batches_no_defects_reports_null_severity(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    now = datetime.now(UTC)
+
+    board = await _make_board(db_session, "BATCH-CLEAN", "A1")
+    await _make_image(db_session, board, status=ImageStatus.COMPLETED, processed_at=now)
+    await db_session.commit()
+
+    body = await _get(client, token, "/api/v1/stats/recent-batches")
+    batch = next(row for row in body["results"] if row["batch_number"] == "BATCH-CLEAN")
+    assert batch["defect_count"] == 0
+    assert batch["severity"] is None
+
+
+async def test_recent_batches_ordered_by_most_recent_activity(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    token = await _setup_account(client)
+    now = datetime.now(UTC)
+
+    older_board = await _make_board(db_session, "BATCH-OLDER", "A1")
+    await _make_image(
+        db_session,
+        older_board,
+        status=ImageStatus.COMPLETED,
+        processed_at=now,
+        created_at=now - timedelta(hours=2),
+    )
+
+    newer_board = await _make_board(db_session, "BATCH-NEWER", "A1")
+    await _make_image(
+        db_session,
+        newer_board,
+        status=ImageStatus.COMPLETED,
+        processed_at=now,
+        created_at=now,
+    )
+
+    await db_session.commit()
+
+    # Ordered by the batch's most recent ingestion, so BATCH-NEWER comes first.
+    body = await _get(client, token, "/api/v1/stats/recent-batches", limit=2)
+    batch_numbers = [row["batch_number"] for row in body["results"]]
+    assert batch_numbers == ["BATCH-NEWER", "BATCH-OLDER"]
 
 
 # --- Cache behavior ----------------------------------------------------------------------------
