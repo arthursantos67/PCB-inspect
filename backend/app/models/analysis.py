@@ -59,3 +59,17 @@ class Analysis(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Language `per_defect`/`executive_summary` above are written in (issue #50) — the station
+    # language at the moment the analysis ran, which is not necessarily the station language
+    # now. Nullable, and read as English when absent: every analysis written before the setting
+    # existed was written in English. Stored as a plain string rather than a Postgres enum
+    # because it is a rendering detail, and adding a supported language should not need a
+    # `CREATE TYPE` migration on a running station.
+    language: Mapped[str | None] = mapped_column(nullable=True)
+    # Cache of this analysis' prose in the *other* languages, keyed by language code:
+    # `{"pt": {"per_defect": [...], "executive_summary": "..."}}`. Filled on demand the first
+    # time a report or a screen asks for a language the analysis was not written in
+    # (`app.analyses.localization`), so the LLM is paid for once per analysis per language
+    # instead of once per report. Never authoritative: `language` above says which text is the
+    # original, and re-running the chain replaces the analysis and clears this.
+    translations: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

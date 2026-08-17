@@ -5,9 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analyses import service as analyses_service
-from app.analyses.schemas import AnalysisOut, AnalysisReviewOut
+from app.analyses.localization import localize_analysis
+from app.analyses.schemas import AnalysisOut, AnalysisReviewOut, PerDefectEntry
 from app.audit.service import record_audit
 from app.core.errors import ApiError
+from app.core.language import Language
 from app.inspections.filters import (
     InspectionFilters,
     Ordering,
@@ -96,9 +98,18 @@ async def list_all_inspections(
     ]
 
 
-async def get_inspection_detail(db: AsyncSession, inspection_id: uuid.UUID) -> InspectionDetail:
+async def get_inspection_detail(
+    db: AsyncSession, inspection_id: uuid.UUID, *, language: Language | None = None
+) -> InspectionDetail:
     """Full detail for the analysis detail screen (FE-03, section 11.5) and for individual
     report generation (FR-11, Issue 35) — both need the exact same shape.
+
+    `language` localizes the analysis prose (issue #50) over the free paths only: a cached
+    translation, or a baseline analysis rebuilt from the other language's catalogue. Calling
+    the model here would block the screen for the minutes a local CPU model takes, so an
+    agent-written analysis that has never been translated comes back in its original language
+    and `analysis.language` says so; the router enqueues the translation in the background.
+    `None` (the default) skips localization entirely and returns the stored text.
     """
     row = (
         await db.execute(
@@ -137,6 +148,20 @@ async def get_inspection_detail(db: AsyncSession, inspection_id: uuid.UUID) -> I
     analysis_out = None
     if analysis is not None:
         analysis_out = AnalysisOut.model_validate(analysis)
+        if language is not None:
+            localized = await localize_analysis(
+                db,
+                analysis,
+                language=language,
+                detections=[detection for detection, _version in detection_rows],
+                allow_llm=False,
+            )
+            if localized is not None:
+                analysis_out.language = localized.language
+                analysis_out.executive_summary = localized.executive_summary
+                analysis_out.per_defect = [
+                    PerDefectEntry.model_validate(entry) for entry in localized.per_defect
+                ]
         # `Analysis` has no ORM relationship to its reviews (this codebase queries joins
         # explicitly rather than via SQLAlchemy relationships) — populated separately so
         # this matches `GET /api/v1/analyses/{id}` exactly, not just an always-empty default.
@@ -227,8 +252,8 @@ async def annotate_detection(
     bbox: BBoxIn,
 ) -> Detection:
     """Manually annotates a defect the model missed (FR-10) — creates a `Detection` row
-    flagged `source=manual`, distinguishable from model output in the UI and in dataset
-    exports (FR-18). Pre-confirmed (`review=confirmed`): the operator drawing it *is* the
+    flagged `source=manual`, distinguishable from model output in the UI and in generated
+    reports. Pre-confirmed (`review=confirmed`): the operator drawing it *is* the
     confirmation, there is no model output left to confirm/reject against. Audited (FR-16).
     """
     image = await db.get(InspectionImage, image_id)

@@ -15,8 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.crypto import InvalidToken, decrypt_secret, encrypt_secret
+from app.core.language import Language
 from app.models import SystemConfig
-from app.settings.service import get_secret_config_value
+from app.settings.service import get_language, get_secret_config_value
 
 ACCOUNT = {
     "email": "operator@pcb-inspect.local",
@@ -298,6 +299,41 @@ async def test_retention_days_reports_override_rejects_zero(client: AsyncClient)
     response = await client.patch(
         "/api/v1/settings/config",
         json={"config": {"retention_days_reports": 0}},
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "CONFIG_INVALID_VALUE"
+
+
+async def test_station_language_is_configurable(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The station language (issue #50) lives in `SystemConfig` rather than the browser so the
+    workers, which generate reports and analyses with nobody logged in, can read it too.
+    """
+    token = await _setup_account(client)
+
+    response = await client.patch(
+        "/api/v1/settings/config",
+        json={"config": {"ui_language": "pt"}},
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["config"]["ui_language"] == "pt"
+    assert await get_language(db_session) is Language.PT
+
+
+async def test_unsupported_station_language_is_rejected(client: AsyncClient) -> None:
+    """Only the languages the app actually ships dictionaries and prompts for: a station set to
+    one it has no wording for would render half-translated screens.
+    """
+    token = await _setup_account(client)
+
+    response = await client.patch(
+        "/api/v1/settings/config",
+        json={"config": {"ui_language": "fr"}},
         headers=_auth_headers(token),
     )
 

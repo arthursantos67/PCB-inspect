@@ -9,8 +9,10 @@ from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analyses.localization import analysis_language
 from app.auth.dependencies import get_current_user
 from app.core.errors import ApiError
+from app.core.language import Language
 from app.db.session import get_db
 from app.inspections import service
 from app.inspections.filters import (
@@ -34,12 +36,15 @@ from app.inspections.state import InvalidTransitionError, transition
 from app.models import Analysis, Batch, Board, BoardDisposition, InspectionImage, User
 from app.models.enums import (
     AnalysisReviewStatus,
+    AnalysisSource,
     BoardDispositionDecision,
     DefectType,
     ImageStatus,
     Severity,
 )
+from app.settings import service as settings_service
 from app.tasks.pipeline import run_agent_analysis
+from app.tasks.translation import translate_analysis
 
 router = APIRouter(prefix="/api/v1/inspections", tags=["inspections"])
 
@@ -126,6 +131,7 @@ async def list_inspections(
 @router.get("/{inspection_id}", response_model=InspectionDetail)
 async def get_inspection(
     inspection_id: uuid.UUID,
+    language: Language | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
 ) -> InspectionDetail:
@@ -133,8 +139,36 @@ async def get_inspection(
     progress-polling fallback to SSE — `detections`/`analysis` are just empty/`None` until
     the pipeline reaches that stage. Also reused by individual report generation (FR-11,
     Issue 35) via `app.inspections.service.get_inspection_detail`.
+
+    `language` defaults to the station's (`ui_language`); the frontend passes its own so a
+    switch takes effect on the screen before the setting round-trips. The analysis prose comes
+    back localized when that is free (issue #50), and `analysis.language` reports what the
+    caller actually got.
     """
-    return await service.get_inspection_detail(db, inspection_id)
+    target = language or await settings_service.get_language(db)
+    detail = await service.get_inspection_detail(db, inspection_id, language=target)
+    await _ensure_translation_queued(db, inspection_id, detail, target)
+    return detail
+
+
+async def _ensure_translation_queued(
+    db: AsyncSession, inspection_id: uuid.UUID, detail: InspectionDetail, language: Language
+) -> None:
+    """Hands an untranslated agent analysis to the background translator (issue #50).
+
+    Only agent-written prose gets here: a baseline analysis is rebuilt from the catalogue
+    inside the detail loader, for free, and never needs the model. Repeated screen loads
+    before the first translation lands simply re-enqueue, which the task is written to absorb.
+    """
+    analysis = detail.analysis
+    if analysis is None or analysis.language is language or not analysis.per_defect:
+        return
+    row = await db.get(Analysis, analysis.id)
+    if row is None or row.source is not AnalysisSource.AGENTS:
+        return
+    if analysis_language(row) is language:
+        return
+    await asyncio.to_thread(translate_analysis.delay, str(analysis.id), language.value)
 
 
 @router.get("/{inspection_id}/image")
@@ -235,7 +269,7 @@ async def annotate_inspection(
 ) -> DetectionOut:
     """Annotates a defect the model missed by drawing a bbox + class directly in the image
     viewer (FR-10, Issue 10) — creates a `Detection` row flagged `source=manual`. Audited
-    (FR-16) and is the input dataset export (FR-18) later packages into training data.
+    (FR-16).
     """
     detection = await service.annotate_detection(
         db,
