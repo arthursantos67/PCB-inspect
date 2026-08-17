@@ -1,0 +1,198 @@
+name: Release
+
+# Produces everything an operator needs to install PCB-Inspect (PRD section 14.1, FR-20,
+# NFR-07): the container images the stack runs from, and a native installer per supported OS.
+# The installer never builds anything on the target machine — it ships the launcher, which
+# pulls the images tagged with this same version on first run.
+#
+# The model weight (`best.pt`, ~114 MB) is NOT built here: it is published once, by hand, as
+# an asset of the separate `model-v1` release, and the launcher downloads it from there
+# (`DEFAULT_WEIGHTS_URL` in launcher/core/src/bootstrap.rs). It changes on its own schedule —
+# retraining, not application releases — so tying it to this workflow would mean re-uploading
+# 114 MB for every patch version.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, without the leading v (e.g. 1.0.0). Uploads artifacts only; no GitHub release and no :latest tag."
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      registry: ${{ steps.resolve.outputs.registry }}
+      is_release: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - id: resolve
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # GHCR rejects uppercase in image paths, and GitHub account names may contain it.
+          echo "registry=ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+  images:
+    name: Publish ${{ matrix.image }} image
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # api, worker-*, and beat all run from backend/Dockerfile — they differ only by the
+        # command docker-compose.yml gives them — so the stack needs exactly two images.
+        image: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        shell: bash
+        run: |
+          image="${{ needs.version.outputs.registry }}/pcb-inspect-${{ matrix.image }}"
+          tags="$image:${{ needs.version.outputs.version }}"
+          if [ "${{ needs.version.outputs.is_release }}" = "true" ]; then
+            tags="$tags,$image:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  bundles:
+    name: Build ${{ matrix.label }} installer
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 rather than latest: the AppImage/deb link against whatever glibc and
+          # webkit2gtk the runner has, so building on the oldest supported runner is what
+          # makes the bundle installable on anything newer.
+          - runner: ubuntu-22.04
+            label: Linux
+            artifact: pcb-inspect-launcher-linux
+            # `launcher/` is the cargo workspace root, so the bundles land in its target
+            # directory, not under the src-tauri/ crate the build runs from.
+            paths: |
+              launcher/target/release/bundle/deb/*.deb
+              launcher/target/release/bundle/appimage/*.AppImage
+          - runner: windows-latest
+            label: Windows
+            artifact: pcb-inspect-launcher-windows
+            paths: |
+              launcher/target/release/bundle/nsis/*.exe
+              launcher/target/release/bundle/msi/*.msi
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            libssl-dev \
+            libfuse2
+
+      # The launcher pulls `pcb-inspect-*:$CARGO_PKG_VERSION` unless .env says otherwise, so
+      # the binary's own version is what points an install at the images published above.
+      # Stamping it here keeps the repo free of version churn between releases.
+      - name: Stamp the release version
+        shell: bash
+        run: |
+          version="${{ needs.version.outputs.version }}"
+          python - "$version" <<'PY'
+          import json, pathlib, re, sys
+
+          version = sys.argv[1]
+
+          cargo = pathlib.Path("launcher/Cargo.toml")
+          cargo.write_text(
+              re.sub(r'^version = "[^"]+"', f'version = "{version}"', cargo.read_text(), count=1, flags=re.M)
+          )
+
+          conf_path = pathlib.Path("launcher/src-tauri/tauri.conf.json")
+          conf = json.loads(conf_path.read_text())
+          conf["version"] = version
+          conf_path.write_text(json.dumps(conf, indent=2) + "\n")
+          PY
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher -> target
+      - run: cargo install tauri-cli --version "^2.0.0" --locked
+      # Run from the Tauri crate itself: the v2 CLI has no --manifest-path, and it resolves
+      # tauri.conf.json relative to the working directory.
+      - run: cargo tauri build
+        working-directory: launcher/src-tauri
+        env:
+          # linuxdeploy and appimagetool are AppImages themselves, so bundling needs FUSE 2
+          # (installed above) or this fallback, which extracts them instead of mounting.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.paths }}
+          retention-days: 14
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [version, images, bundles]
+    if: needs.version.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: bundles
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: bundles/**/*
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            Download the installer for your operating system below, run it, and start
+            **PCB-Inspect Launcher**. The first launch downloads the application images and the
+            inspection model, then starts the stack — no terminal and no configuration.
+
+            | OS | File |
+            | --- | --- |
+            | Windows 10/11 | `.exe` (recommended) or `.msi` |
+            | Debian/Ubuntu | `.deb` |
+            | Other Linux | `.AppImage` |
+
+            **Requirement:** a container runtime must already be installed —
+            [Docker Desktop](https://www.docker.com/products/docker-desktop/) on Windows,
+            Docker Engine on Linux. The launcher checks for it and says so if it is missing.
+
+            Images for this version: `${{ needs.version.outputs.registry }}/pcb-inspect-backend:${{ needs.version.outputs.version }}`,
+            `${{ needs.version.outputs.registry }}/pcb-inspect-frontend:${{ needs.version.outputs.version }}`.

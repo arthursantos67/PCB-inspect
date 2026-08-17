@@ -14,12 +14,12 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
-      - run: pip install -e ".[dev]"
-      - run: ruff check .
-      - run: mypy app
+          version: "latest"
+      - run: uv sync --locked --extra dev
+      - run: uv run ruff check .
+      - run: uv run mypy app
 
   backend-test:
     name: Backend migrations & tests
@@ -55,12 +55,12 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
-      - run: pip install -e ".[dev]"
-      - run: alembic upgrade head
-      - run: pytest
+          version: "latest"
+      - run: uv sync --locked --extra dev
+      - run: uv run alembic upgrade head
+      - run: uv run pytest
 
   frontend-lint:
     name: Frontend lint, type-check & unit tests
@@ -124,10 +124,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
-      - run: pip install -e ".[dev]"
+          version: "latest"
+      - run: uv sync --locked --extra dev
         working-directory: backend
 
       - run: mkdir -p "$WATCH_ROOT" "$APP_DATA_DIR"
@@ -135,19 +135,19 @@ jobs:
       - name: Apply migrations and seed dev account
         working-directory: backend
         run: |
-          alembic upgrade head
-          python -m app.db.seed
+          uv run alembic upgrade head
+          uv run python -m app.db.seed
 
       - name: Start API
         working-directory: backend
-        run: nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/pcb-e2e-api.log 2>&1 &
+        run: nohup uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/pcb-e2e-api.log 2>&1 &
 
       - name: Start inference worker (fake backend)
         working-directory: backend
         env:
           WORKER_ROLE: inference
         run: |
-          nohup celery -A app.tasks.celery_app worker --pool=solo --queues=inference \
+          nohup uv run celery -A app.tasks.celery_app worker --pool=solo --queues=inference \
             --loglevel=info > /tmp/pcb-e2e-worker.log 2>&1 &
 
       - name: Start agent worker (no LLM configured)
@@ -161,7 +161,7 @@ jobs:
         # LLM Configured => No Crash" acceptance criterion) rather than leaving the image
         # stuck in ANALYZING forever with nothing consuming the queue.
         run: |
-          nohup celery -A app.tasks.celery_app worker --pool=threads --queues=agents \
+          nohup uv run celery -A app.tasks.celery_app worker --pool=threads --queues=agents \
             --loglevel=info > /tmp/pcb-e2e-agent-worker.log 2>&1 &
 
       - name: Wait for API health
@@ -230,7 +230,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
-      - run: docker compose config -q
+      # .env.example sets COMPOSE_FILE to the developer layering (release + build + dev), so
+      # this validates the file set a checkout actually runs.
+      - name: Validate the developer composition
+        run: docker compose config -q
+      # And this validates the one an installed machine runs: docker-compose.yml alone, with
+      # no build overlay to fall back on. It is the file the launcher embeds and writes out
+      # (launcher/core/src/bootstrap.rs), so a mistake here breaks every install, not a
+      # checkout. The environment wins over .env, so no second file is needed.
+      - name: Validate the released composition
+        env:
+          COMPOSE_FILE: docker-compose.yml
+        run: docker compose config -q
 
   launcher-core-test:
     name: Launcher core lint & tests
@@ -254,8 +265,8 @@ jobs:
   # GitHub-hosted runners can fully link without extra licensing/VM setup (Linux, via
   # webkit2gtk). This is what catches Tauri v2 API-usage mistakes in launcher/src-tauri —
   # `launcher-core-test` above only proves the GUI-independent orchestration logic works.
-  # Windows packaging (AC4) is a separate, manually-triggered job (see launcher-package-windows
-  # in this workflow) since a full release build + installer is too slow to run on every push.
+  # Installer packaging for Linux and Windows lives in release.yml (tag push or manual run),
+  # since a full release build + bundle per OS is too slow for every push.
   launcher-build:
     name: Launcher Tauri shell (compile check)
     runs-on: ubuntu-latest
@@ -292,12 +303,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      # No `target`, so this builds the last stage — for the frontend that is `runner`, the
+      # optimized standalone server the released image runs (issue 10.2), not the dev server.
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.image }}
           push: false
           load: ${{ matrix.image == 'backend' }}
           tags: pcb-inspect-${{ matrix.image }}:ci
+
+      # The dev stage is only ever built through docker-compose.dev.yml, which nothing in CI
+      # runs — without this it would rot unnoticed until a developer's next `up --build`.
+      - name: Build the frontend dev stage (hot-reload target)
+        if: matrix.image == 'frontend'
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          target: dev
+          push: false
+          tags: pcb-inspect-frontend:dev-ci
 
       # Regression guard (issue #21): the `e2e` job above always runs with
       # INFERENCE_BACKEND=fake, which never imports ultralytics/cv2 and so never caught the

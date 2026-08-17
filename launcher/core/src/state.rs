@@ -3,11 +3,29 @@
 /// lets the orchestrator both emit and return the terminal state.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LauncherState {
+    /// Creating the install directory, writing `docker-compose.yml` and generating `.env` on
+    /// first run (see `bootstrap.rs`). Normally too fast to read.
+    PreparingInstall,
+    /// The install directory could not be provisioned (unwritable data directory, or an
+    /// explicitly configured project directory with no compose file in it). Terminal.
+    InstallFailed(String),
     /// Checking whether the container runtime (Docker) is installed and its daemon reachable.
     CheckingRuntime,
     /// `docker info` failed or the `docker` binary isn't on PATH — the Error Visibility
     /// acceptance criterion: this must render as an actionable message, not a hang.
     RuntimeUnavailable(String),
+    /// Downloading the YOLO weight, which only happens once and is the longest single step of a
+    /// first launch — reported with byte counts so the window can show real progress rather
+    /// than an unmoving spinner. `total_bytes` is absent when the server declares no length.
+    DownloadingModel {
+        received_bytes: u64,
+        total_bytes: Option<u64>,
+    },
+    /// The weight could not be placed, so inference would fail on every board. Terminal.
+    ModelUnavailable(String),
+    /// Pulling the published images, the multi-gigabyte step of a first launch. Skipped
+    /// entirely once they are on the machine, and when the stack builds from source.
+    PullingImages,
     /// The stack was already up when the launcher checked — the Warm Start path. `docker
     /// compose up -d` still runs (see orchestrator docs) but is a no-op against already-running
     /// containers, so no duplicates are created.
@@ -31,7 +49,9 @@ impl LauncherState {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            LauncherState::RuntimeUnavailable(_)
+            LauncherState::InstallFailed(_)
+                | LauncherState::RuntimeUnavailable(_)
+                | LauncherState::ModelUnavailable(_)
                 | LauncherState::StartupFailed(_)
                 | LauncherState::Ready
                 | LauncherState::HealthTimedOut(_)
@@ -40,7 +60,9 @@ impl LauncherState {
 
     pub fn error_detail(&self) -> Option<&str> {
         match self {
-            LauncherState::RuntimeUnavailable(detail)
+            LauncherState::InstallFailed(detail)
+            | LauncherState::RuntimeUnavailable(detail)
+            | LauncherState::ModelUnavailable(detail)
             | LauncherState::StartupFailed(detail)
             | LauncherState::HealthTimedOut(detail) => Some(detail),
             _ => None,
