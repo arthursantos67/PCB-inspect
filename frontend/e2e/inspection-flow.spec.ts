@@ -56,9 +56,12 @@ test("ingests a board, processes it, and renders the completed analysis", async 
   await row.getByRole("link", { name: boardNumber }).click();
   await expect(page).toHaveURL(/\/inspections\/.+/);
 
-  // --- Detail screen starts in a processing state and updates live via SSE (no refresh) ---
+  // --- Detail screen starts in a processing state and updates live via SSE (no refresh).
+  // Scoped to #main-content since the sidebar's "Analysis" nav group label is also exact
+  // text "Analysis" ---
+  const main = page.locator("#main-content");
   await expect(page.getByText("Processing", { exact: true })).toHaveCount(0, { timeout: 30_000 });
-  await expect(page.getByText("Analysis", { exact: true })).toBeVisible();
+  await expect(main.getByText("Analysis", { exact: true })).toBeVisible();
   await assertNoA11yViolations(page, "Inspection detail");
 
   // --- Detections panel synced with the fake backend's deterministic "short" defect ---

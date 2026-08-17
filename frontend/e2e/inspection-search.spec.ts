@@ -39,8 +39,9 @@ test("filters the inspections list, combined and alone, with shareable URL state
   await page.getByRole("button", { name: "Scan directory now" }).click();
   await expect(page.getByText("Discovered 2 · Ingested 2 · Duplicate 0 · Failed 0 · Skipped 0")).toBeVisible();
 
-  // --- Navigate to the search/history screen via the nav entry (not a raw goto) ---
-  await page.getByRole("link", { name: "Inspections" }).click();
+  // --- Navigate to the search/history screen via the nav entry (not a raw goto). Scoped to
+  // the "Primary" nav landmark since the dashboard also has an "All inspections" link ---
+  await page.getByLabel("Primary").getByRole("link", { name: "Inspections" }).click();
   await expect(page).toHaveURL("/inspections");
   await assertNoA11yViolations(page, "Inspections search/history");
 
@@ -58,7 +59,8 @@ test("filters the inspections list, combined and alone, with shareable URL state
   await expect(rowB).toHaveCount(0);
 
   // --- Board filter alone narrows to a single result and updates the URL (shareable) ---
-  await page.getByLabel("Board").fill(boardA);
+  // exact: true — "Board decision" is a substring match of "Board" otherwise
+  await page.getByLabel("Board", { exact: true }).fill(boardA);
   await expect(page).toHaveURL(new RegExp(`board_number=${boardA}`), { timeout: 5_000 });
   await expect(rowA).toBeVisible();
   await expect(rowB).toHaveCount(0);
@@ -80,7 +82,7 @@ test("filters the inspections list, combined and alone, with shareable URL state
   const filteredUrl = page.url();
   await page.reload();
   await expect(page).toHaveURL(filteredUrl);
-  await expect(page.getByLabel("Board")).toHaveValue(boardA);
+  await expect(page.getByLabel("Board", { exact: true })).toHaveValue(boardA);
   await expect(page.getByRole("checkbox", { name: "Missing hole" })).toBeChecked();
   await expect(page.getByText("No boards match these filters.")).toBeVisible();
 

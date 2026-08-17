@@ -86,7 +86,8 @@ test("completes the Phase-1 golden path using the keyboard alone", async ({ page
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(new RegExp(`batch_number=${batchNumber}`));
 
-  await page.getByLabel("Board").focus();
+  // exact: true — "Board decision" is a substring match of "Board" otherwise
+  await page.getByLabel("Board", { exact: true }).focus();
   await page.keyboard.type(boardNumber);
   const row = page.getByRole("row", { name: new RegExp(boardNumber) });
   await expect(row).toBeVisible({ timeout: 30_000 });

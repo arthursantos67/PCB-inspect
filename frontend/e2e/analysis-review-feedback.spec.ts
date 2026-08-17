@@ -51,8 +51,8 @@ test("validates an analysis, gives detection feedback, sets disposition, and man
   const detectionsList = page.getByRole("list", { name: "Detected defects" });
   await expect(detectionsList.getByText("Short")).toBeVisible();
   await page.getByRole("button", { name: "Confirm", exact: true }).click();
-  await expect(detectionsList.getByText("Feedback: Confirmed")).toBeVisible();
-  // The button itself stays visibly pressed and renames itself.
+  // The button itself stays visibly pressed and renames itself (no separate status line
+  // by design, see DetectionsPanel.tsx).
   await expect(page.getByRole("button", { name: "Confirmed" })).toHaveAttribute(
     "aria-pressed",
     "true"
@@ -72,8 +72,9 @@ test("validates an analysis, gives detection feedback, sets disposition, and man
   await page.getByLabel("What happens to this board").selectOption("approved");
   await expect(page.getByLabel("What happens to this board")).toHaveValue("approved");
 
-  // --- The board decision shows on search results too (Issue 8's filter list) ---
-  await page.getByRole("link", { name: "Inspections" }).click();
+  // --- The board decision shows on search results too (Issue 8's filter list). Scoped to
+  // the "Primary" nav landmark since this detail page also has an "All inspections" link ---
+  await page.getByLabel("Primary").getByRole("link", { name: "Inspections" }).click();
   await expect(page).toHaveURL("/inspections");
   await page.getByRole("row", { name: new RegExp(batchNumber) }).first().click();
   const searchRow = page.getByRole("row", { name: new RegExp(boardNumber) });
