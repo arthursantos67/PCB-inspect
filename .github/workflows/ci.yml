@@ -17,7 +17,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
-      - run: uv sync --locked --extra dev
+      - run: uv sync --extra dev
       - run: uv run ruff check .
       - run: uv run mypy app
 
@@ -58,7 +58,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
-      - run: uv sync --locked --extra dev
+      - run: uv sync --extra dev
       - run: uv run alembic upgrade head
       - run: uv run pytest
 
@@ -127,7 +127,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
-      - run: uv sync --locked --extra dev
+      - run: uv sync --extra dev
         working-directory: backend
 
       - run: mkdir -p "$WATCH_ROOT" "$APP_DATA_DIR"

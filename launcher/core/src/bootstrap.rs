@@ -320,9 +320,14 @@ fn reconcile_database_password(existing: &str, defaults: &mut [(String, String)]
             (key.trim() == wanted).then(|| value.trim().to_string())
         })
     };
-    let Some(password) = value_of("POSTGRES_PASSWORD").filter(|p| !p.is_empty()).or_else(|| {
-        value_of("DATABASE_URL").as_deref().and_then(password_from_database_url)
-    }) else {
+    let Some(password) = value_of("POSTGRES_PASSWORD")
+        .filter(|p| !p.is_empty())
+        .or_else(|| {
+            value_of("DATABASE_URL")
+                .as_deref()
+                .and_then(password_from_database_url)
+        })
+    else {
         // Neither half is there: the file predates both, and the fresh defaults already agree.
         return;
     };
