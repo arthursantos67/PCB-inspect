@@ -276,24 +276,20 @@ async def test_retention_days_is_configurable(client: AsyncClient) -> None:
     assert response.json()["config"]["retention_days"] == 730
 
 
-async def test_retention_days_reports_and_exports_overrides_are_configurable(
-    client: AsyncClient,
-) -> None:
-    """Per-artifact-type overrides (Issue 39/FR-17) — a shorter window for reports/exports than
-    the base `retention_days` inspection-data window.
+async def test_retention_days_reports_override_is_configurable(client: AsyncClient) -> None:
+    """Per-artifact-type override (Issue 39/FR-17): generated reports can be kept for a shorter
+    window than the base `retention_days` inspection-data one.
     """
     token = await _setup_account(client)
 
     response = await client.patch(
         "/api/v1/settings/config",
-        json={"config": {"retention_days_reports": 30, "retention_days_exports": 14}},
+        json={"config": {"retention_days_reports": 30}},
         headers=_auth_headers(token),
     )
 
     assert response.status_code == 200
-    config = response.json()["config"]
-    assert config["retention_days_reports"] == 30
-    assert config["retention_days_exports"] == 14
+    assert response.json()["config"]["retention_days_reports"] == 30
 
 
 async def test_retention_days_reports_override_rejects_zero(client: AsyncClient) -> None:
