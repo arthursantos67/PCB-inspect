@@ -6,6 +6,7 @@ from app.alerts.router import router as alerts_router
 from app.analyses.router import router as analyses_router
 from app.audit.router import router as audit_router
 from app.auth.router import router as auth_router
+from app.batches.router import router as batches_router
 from app.chat.router import router as chat_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
@@ -45,6 +46,7 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(ingestion_router)
 app.include_router(inspections_router)
+app.include_router(batches_router)
 app.include_router(settings_router)
 app.include_router(models_router)
 app.include_router(analyses_router)

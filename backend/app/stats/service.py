@@ -12,12 +12,14 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.batches import service as batch_service
 from app.models import Analysis, Batch, Board, Detection, InspectionImage
 from app.models.enums import AnalysisReviewStatus, DefectType, ImageStatus
 from app.stats.schemas import (
     DefectTypeCount,
     Granularity,
     Period,
+    RecentBatch,
     StatsByDefectType,
     StatsSummary,
     StatsTrends,
@@ -200,6 +202,39 @@ async def compute_trends(
     ]
 
     return StatsTrends(period=period, granularity=granularity, points=points)
+
+
+async def compute_recent_batches(db: AsyncSession, *, limit: int = 10) -> list[RecentBatch]:
+    """Backs the dashboard's "Recently analyzed batches" card, replacing the old per-board
+    "Recent analyses" list. A thin projection of `app.batches.service`'s aggregates onto the
+    card's narrower shape — the batch list screen reads the same aggregates, so a batch's
+    defect count, severity and status are identical on both screens by construction.
+
+    - `status` is the worst-in-progress status across the batch's images
+      (`app.batches.service.STATUS_PRIORITY`) — considers every image regardless of status, so
+      an in-flight batch is visibly "processing"/"failed" rather than silently omitted.
+    - `defect_count` and `severity` only look at `COMPLETED` images' `is_reported=true`
+      detections (RN-07, same rule as every other aggregate in this module). `severity`
+      combines *what* was found with *how widespread* it is
+      (`severity_from_defect_counts`): a batch made up mostly of low-severity nuisance defects
+      (mouse_bite/spur) reads as low/medium even with a high defect count, a batch with the
+      same count dominated by critical types (open_circuit/short) reads higher, and the share
+      of defective boards in the batch scales the result so a couple of bad boards out of
+      hundreds never reads like half the batch. Count alone never decides it. `None` when the
+      batch has no reported defects yet.
+    """
+    aggregates = await batch_service.recent_batches(db, limit=limit)
+    return [
+        RecentBatch(
+            batch_id=aggregate.batch_id,
+            batch_number=aggregate.batch_number,
+            defect_count=aggregate.defect_count,
+            severity=aggregate.severity,
+            status=aggregate.status,
+            created_at=aggregate.last_activity_at,
+        )
+        for aggregate in aggregates
+    ]
 
 
 def _generate_buckets(start: date, end: date, granularity: Granularity) -> list[date]:
