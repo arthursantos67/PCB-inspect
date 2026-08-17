@@ -97,5 +97,8 @@ test("filters the inspections list, combined and alone, with shareable URL state
   await expect(rowA).toBeVisible({ timeout: 30_000 });
   await rowA.getByRole("link", { name: boardA }).click();
   await expect(page).toHaveURL(/\/inspections\/.+/);
-  await expect(page.getByText(`Board ${boardA}`)).toBeVisible();
+  // The heading's label and the board number are separate spans (no literal space between
+  // them in the DOM), so match on the accessible name (which the accname algorithm joins
+  // with a space) rather than raw text content.
+  await expect(page.getByRole("heading", { name: new RegExp(boardA) })).toBeVisible();
 });

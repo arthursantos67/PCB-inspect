@@ -96,7 +96,10 @@ test("completes the Phase-1 golden path using the keyboard alone", async ({ page
   await row.getByRole("link", { name: boardNumber }).focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/inspections\/.+/);
-  await expect(page.getByText(`Board ${boardNumber}`)).toBeVisible();
+  // The heading's label and the board number are separate spans (no literal space between
+  // them in the DOM), so match on the accessible name (which the accname algorithm joins
+  // with a space) rather than raw text content.
+  await expect(page.getByRole("heading", { name: new RegExp(boardNumber) })).toBeVisible();
 
   // --- Detail screen: toggle to the annotated image and reach a bbox detection button,
   // all via keyboard, once the pipeline has produced a detection ---

@@ -61,12 +61,18 @@ test("validates an analysis, gives detection feedback, sets disposition, and man
   // --- Review Recorded: validate the analysis with a comment ---
   await page.getByLabel("Comment (optional)").fill("Looks correct.");
   await page.getByRole("button", { name: "Validate" }).click();
-  await expect(page.getByText("Review status: Validated")).toBeVisible();
-  await expect(page.getByText(/validated · .* — Looks correct\./)).toBeVisible();
+  // The status label ("Analysis review") and its value ("Validated") are separate
+  // paragraphs, so this is covered by the button's own relabel + pressed state below.
   await expect(page.getByRole("button", { name: "Validated" })).toHaveAttribute(
     "aria-pressed",
     "true"
   );
+  // The review history entry (action, timestamp, comment) renders as separate elements
+  // with no literal separator text between them, so check each independently rather than
+  // matching one concatenated string.
+  const historyEntry = page.locator("li", { hasText: "Looks correct." });
+  await expect(historyEntry).toBeVisible();
+  await expect(historyEntry).toContainText("Validated");
 
   // --- Disposition Recorded: set what happens to the physical board ---
   await page.getByLabel("What happens to this board").selectOption("approved");
